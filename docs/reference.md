@@ -12,4 +12,4 @@
 ~~activeNodeIds（List<String>）~~
 ~~completedNodeIds（List<String>）~~
 ~~failedNodeIds（List<String>，CopyOnWriteArrayList）~~
-~~completedNodeIds（List<String>，CopyOnWriteArrayList）~~
+~~completedNodeIds（List<String>，CopyOnWriteArrayList）
