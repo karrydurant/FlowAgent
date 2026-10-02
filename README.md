@@ -13,3 +13,5 @@
 ## [LLM-as-Judge 质量门禁部分](docs/llm-as-judge.md)
 
 ## [token 成本记录部分](docs/token-consumption.md)
+
+## [多Agent一起协商，互相委派](docs/a2a.md)
