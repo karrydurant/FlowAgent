@@ -1,5 +1,7 @@
 # FlowAgent：一个多 Agent 工作流编排系统
 
+## [使用说明](docs/guide.md)
+
 ## [未来项目的几个改进点](docs/future-improvement.md)
 
 ## 项目定位
