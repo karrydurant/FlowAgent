@@ -12,14 +12,18 @@
 
 3.为智能体引入工具，两种方式：HTTP+SSE；HTTP
 
-4.选定模型后可以创建智能体，你既可以在 "智能体" 卡片配置，也可以在
+4.选定模型后可以创建智能体，你可以在 "智能体" 卡片配置，卡片上有几个勾选：
+
+"可协作的Agent"：这个似乎和流程图里在A2A协作节点编辑有冲突，但在这里，指的是可以委派任务的Agent，相当于把Agent当工具了
+
+5.在 A2A 协作卡片，[可以配置 "委派" "协商"](docs/usea2a.md)
 
 ### [关于工具引入](docs/tools.md)
 
-## [执行引擎](docs/workflow-engine.md)
+### [执行引擎](docs/workflow-engine.md)
 
-## [token 成本记录](docs/token-consumption.md)
+### [token 成本记录](docs/token-consumption.md)
 
-## [多 Agent 一起协商，互相委派](docs/a2a.md)
+### [多 Agent 一起协商，互相委派](docs/a2a.md)
 
-## [LLM-as-Judge 质量门禁](docs/llm-as-judge.md)
+### [LLM-as-Judge 质量门禁](docs/llm-as-judge.md)
