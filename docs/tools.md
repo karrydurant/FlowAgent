@@ -50,7 +50,7 @@ MCP Server 启动时主动`tools/list`上报所有可用工具、参数 schema�
 
 **当前引入外部工具只支持输入 SSE 地址**
 
-### 以 Agent 调用工具实现搜索物品 A 为例，演示一下过程
+### 以 Agent 调用工具实现搜索物品 A 为例，演示一下过程（使用 MCP 的 HTTP+SSE Transport）
 
 阶段一：握手+工具列表发现(tools/list)
 
