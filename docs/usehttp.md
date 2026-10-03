@@ -1,0 +1,35 @@
+## 项目中可以就只使用 HTTP 来引入工具
+
+原生 MCP 的流程：
+
+原生 MCP Server 在连接建立后，必须响应 `tools/list` 请求，返回所有工具的清单：工具名、描述、入参 JSON Schema。
+这是 MCP 协议规定的，LLM 靠这个清单知道能调用哪些工具。
+
+在 HTTP 声明工具这个模式里：
+
+tools/list 不再由你的后端代码提供，而是 "MCP 网关自动生成"，你在页面表单里填：工具名、描述、JSON Schema → 平台保存这份配置。
+当 LLM / 客户端发起 MCP 的`tools/list`查询时：
+ 
+网关读取你网页上填写的表单配置，直接拼装出标准`tools/list`的返回 JSON，返回给 LLM。
+你的 HTTP 后端完全不用实现`tools/list`，甚至不知道 MCP 存在。
+
+### GET/POST 与占位符规则
+
+GET 模式
+
+占位符`{param}`可以写在 URL 路径或者 query 参数里：`https://api.xxx/weather?city={city}`
+有 URL 长度上限，不能传递超长文本；参数会暴露在日志、请求链接中，禁止传密码、密钥等敏感信息。
+
+POST 模式
+
+URL 里面的 `{参数名} 占位符不会被替换！所有参数全部放进请求 Body（JSON）。
+适合长文本、复杂嵌套参数、提交类操作。
+
+### LLM 调用相关
+
+工具描述非常关键
+
+JSON Schema 要严谨：
+
+Schema 定义越严格，模型输出参数越规范。
+
