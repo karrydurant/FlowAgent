@@ -14,7 +14,7 @@
 
 选定模型后可以创建智能体，你既可以在 "智能体" 卡片配置，也可以在
 
-### [关于工具引入](doc/tools.md)
+### [关于工具引入](docs/tools.md)
 
 ## [执行引擎](docs/workflow-engine.md)
 
