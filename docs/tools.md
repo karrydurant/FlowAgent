@@ -49,3 +49,69 @@ protobuf 二进制协议，高性能内部服务。适合企业内部高吞吐�
 MCP Server 启动时主动`tools/list`上报所有可用工具、参数 schema；智能体自动发现，动态热加载新增工具，不需要硬编码工具列表。
 
 **当前引入外部工具只支持输入 SSE 地址**
+
+### 以 Agent 调用工具实现搜索物品 A 为例，演示一下过程
+
+阶段一：握手+工具列表发现(tools/list)
+
+1.Agent(MCP Client) 拿到 MCP Server 的 SSE 地址，发起 GET/sse 建立 SSE 长连接
+
+2.MCP Server 通过 SSE 推送消息，返回 messageEndpoint（POST 接口地址，用来下发指令）
+
+3.Agent 通过 POST 向这个 endpoint 发送一条 MCP JSON-RPC 请求：tools/list。问：你有什么工具？把工具能力告诉我
+
+4.MCP Server 返回工具清单
+
+```json
+{
+  "tools":[
+    {
+      "name":"web_search",
+      "description":"网页搜索工具，用于检索互联网信息",
+      "inputSchema":{
+        "type":"object",
+        "properties":{"query":{"type":"string","description":"搜索关键词"}}
+      }
+    }
+  ]
+}
+```
+
+MCP Server 主动告诉 Agent：我有一个 web_search 工具，需要传入 query 字符串参数。
+
+阶段二：大模型判断要不要调用工具，构造调用请求
+
+1.用户提问：帮我搜索物品 A
+
+2.大模型读到用户问题 + MCP 上报的工具描述（`web_search`的功能和参数 schema）
+
+3.模型推理判断：我自己不知道物品 A 信息，需要调用`web_search`工具，参数`query="物品A"`
+
+4.Agent（MCP Client）封装成 MCP JSON-RPC 调用消息 `tools/call`，POST 发送给 messageEndpoint
+
+```json
+{
+  "jsonrpc":"2.0",
+  "method":"tools/call",
+  "params":{
+    "name":"web_search",
+    "arguments":{"query":"物品A"}
+  }
+}
+```
+
+阶段三：MCP Server 收到调用请求，真正执行工具逻辑
+
+1.解析收到的`tools/call`请求，识别工具名`web_search`、参数`query=物品A`
+   
+2.执行内部业务代码：调用搜索后端 / 爬虫 / 浏览器 API，发起网络请求去搜索物品 A
+
+3.拿到搜索结果
+
+阶段四：MCP Server 把结果，通过 SSE 推回 Agent
+
+1.搜索结果组装成 MCP 规定的返回消息
+
+2.通过已经建立好的 SSE 长连接，推送给 Agent（支持分片流式返回，边搜边回）
+
+3.Agent 拿到搜索结果，交给大模型，大模型基于搜索结果整理答案给用户
