@@ -18,6 +18,8 @@
 
 5.在 A2A 协作卡片，[可以配置 "委派" "协商"](docs/usea2a.md)
 
+6.[前端界面两个会话栏](docs/memories.md)
+
 ### [关于工具引入](docs/tools.md)
 
 ### [执行引擎](docs/workflow-engine.md)
