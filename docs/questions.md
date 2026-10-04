@@ -8,25 +8,25 @@
 
 query_database(...)  <- MCP 工具
 
-call_agent_docs(...)  <- 对等体，被渲染成工具
+call_agent_docs(...)  <- 被渲染成工具
 
-模型要委派，就是调一个工具。跟调 query_database 没有任何区别
+模型要委派，就是调一个工具。跟调 query_database 没有任何区别。
 
-判断"什么时候该委派"全靠模型自己，但是 "能委派什么"和"委派不成怎么办"全在代码：
+虽然判断"什么时候该委派"全靠模型自己，但是"能委派什么"和"委派不成怎么办"全在代码：
 
 1.谁能被看到
 
-listTools() 只列 acceptsDelegation=true 的；allowedTools 白名单默认关闭 -- 白名单就是拓扑。 
+listTools() 只列 acceptsDelegation=true 的；allowedTools 白名单默认关闭。 
 
 模型看不到的，它就调不到
 
 2.能不能委派
 
-三个前置检查：身份缺失，目标是自己，深度超限都拒绝
+三个前置检查：身份缺失，目标是自己，[深度](depth.md)超限都拒绝
 
 模型想调，代码可以不让
 
-3.不成功怎么办
+3.[不成功具体怎么办](iffail.md)
 
 等待循环 + replyTo 配对 + deadline
 
