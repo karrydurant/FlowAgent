@@ -2,7 +2,7 @@
 
 ## 委派的判断逻辑（什么时候委派）写在哪里？prompt 里、代码规则里，还是 LLM 自主判断？
 
-在本项目中 "智能体A" 委派 "智能体B" 实际上就是 A 把 B 当成工具了（PeerAgentToolBridge.java 中的 listTools() 方法会[把智能体 "渲染" 成工具](docs/agent-to-tool.md)）。
+在本项目中 "智能体A" 委派 "智能体B" 实际上就是 A 把 B 当成工具了（PeerAgentToolBridge.java 中的 listTools() 方法会[把智能体 "渲染" 成工具](/agent-to-tool.md)）。
 
 模型眼里的工具表长这样：
 
