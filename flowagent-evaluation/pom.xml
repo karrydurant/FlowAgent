@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.flowagent</groupId>
+        <artifactId>flowagent-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>flowagent-evaluation</artifactId>
+    <packaging>jar</packaging>
+    <name>FlowAgent Evaluation Engine</name>
+    <description>评测引擎 — LLM-as-Judge、多维度指标、A/B 实验</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-common</artifactId>
+        </dependency>
+        <!--
+            判官自己的 LLM 调用也要记进 CostTracker，否则 /observability/cost 报出来的成本
+            系统性低估 —— 质量门禁恰恰是「每跑一次就多一次 LLM 调用」的装置，
+            不开账就答不出「开这个门禁贵了多少」。
+            observability 只依赖 common，本模块也只依赖 common，不构成环。
+        -->
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-observability</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.fastjson2</groupId>
+            <artifactId>fastjson2</artifactId>
+        </dependency>
+        <!-- Spring AI — 用于 LLM-as-Judge 评测 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.flowagent</groupId>
+        <artifactId>flowagent-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>flowagent-server</artifactId>
+    <packaging>jar</packaging>
+    <name>FlowAgent Server</name>
+    <description>FlowAgent 主服务 — 聚合所有模块的启动入口</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-workflow-engine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-mcp-gateway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-a2a-gateway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-agent-registry</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-human-gateway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-graphrag</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-evaluation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.flowagent</groupId>
+            <artifactId>flowagent-observability</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- MyBatis-Plus 数据持久化（工作流/Agent 定义 → MySQL） -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        </dependency>
+        <!-- MySQL JDBC 驱动（业务元数据主库） -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+        </dependency>
+        <!--
+          RocketMQ：审批结论的快速唤醒通路（主题 flowagent.approval.resolved）。
+          只加在这个模块：它是唯一带 spring-boot-maven-plugin 的应用模块，
+          broker 依赖与配置只出现在这里，库模块（含 human-gateway）不必知道 MQ 存在 ——
+          它们只注入 flowagent-common 的 RunWakeupPublisher 端口。
+          不配 rocketmq.name-server 时官方自动配置**并不**退避：类级条件写的是
+          @ConditionalOnProperty(prefix="rocketmq", value="name-server", matchIfMissing=true)
+          —— javap 核对过，matchIfMissing 是 true。早先只核到「挂着这个注解」就下了
+          「默认退避」的结论，漏掉了这个属性。所以「没有 broker 也能启动」这条原则
+          落在 ApprovalWakeupConsumer 的 @ConditionalOnProperty 上，不在自动配置上。
+        -->
+        <dependency>
+            <groupId>org.apache.rocketmq</groupId>
+            <artifactId>rocketmq-spring-boot-starter</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

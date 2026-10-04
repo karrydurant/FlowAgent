@@ -1,0 +1,13 @@
+# 全仓库统一用 LF 行尾。
+#
+# 这个项目（含 shell 脚本、YAML、Java 源码）在磁盘上全部是 LF。如果不在这里钉死，
+# Windows 上 git 默认的 core.autocrlf=true 会在检出时把每个文件换成 CRLF：
+#   - demo/demo.sh 带 CRLF 会在 bash 下报 "$'\r': command not found"，脚本直接不可用；
+#   - 第一次检出会把所有文件标记为已修改，产生一个几千行的假 diff，把真实改动静掉。
+* text=auto eol=lf
+
+# 明确二进制，避免 git 试图转换
+*.png binary
+*.jpg binary
+*.jar binary
+*.xlsx binary

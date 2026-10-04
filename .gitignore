@@ -1,0 +1,31 @@
+# ======================== Java / Maven ========================
+target/
+*.class
+*.log
+.flattened-pom.xml
+
+# ======================== IDE ========================
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# ======================== 本地密钥 / 配置（切勿提交） ========================
+application-local.yml
+**/application-local.yml
+application-*.local.yml
+
+# 环境变量文件：.env 里是 OPENAI_API_KEY / POSTGRES_PASSWORD / NEO4J_AUTH 的真值。
+# 只放行示例文件，其余 .env* 一律不提交（含 .env.bak、.env.production 等变体）。
+.env
+.env.*
+!.env.example
+
+# ======================== 运行时产物 ========================
+# demo.sh 每次运行都会覆写这几个文件，内容是当次请求/响应，不进版本库。
+demo/.*.json
+demo/.*-pretty.txt
+
+# ======================== OS ========================
+.DS_Store
+Thumbs.db
