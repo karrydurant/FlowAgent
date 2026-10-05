@@ -1,18 +1,37 @@
 # 整体定位
 
 是 FlowAgent 中 A2A 会话体系的任务执行派发器。它的核心职责是：接收投递过来的会话消息，
-筛选出需要目标 Agent 实际执行的消息类型，在独立线程池中调用目标 Agent 完成任务，最终将
-执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
+筛选出需要目标 Agent 实际执行的消息类型，在独立线程池中调用目标 Agent 完成任务，最终将执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
 
 # 三个核心设计目标
 
-防循环调用
+防循环：Agent 消息循环 + 组件依赖循环
 
-幂等性保障
+幂等性保障：同一条消息无论被唤醒多少次，保证只执行一次
 
-故障隔离与可观测
+故障隔离与可观测：执行逻辑与投递逻辑解耦，异常不扩散，故障类型可被精准监控
 
 ## 防环设计
+
+可执行消息白名单
+
+```java
+private static final Set<A2aMessage.MessageKind> EXECUTABLE_KINDS =
+        EnumSet.of(A2aMessage.MessageKind.REQUEST, A2aMessage.MessageKind.SOLICIT);
+```
+
+仅 REQUEST（委派任务）、SOLICIT（征询意见） 两种消息会触发实际执行 -- 这两类都要对方 Agent 运行推理后才能给答复。
+
+这是防循环的核心。执行完成后会回投回复消息，而回复消息不在可执行集合里，链路到此自动终止。
+
+另外回复类型是由请求决定的：
+
+REQUEST->REPLY
+
+SOLICIT->PROPOSE（立场表态）
+
+回写走 HTTP 而非直接注入
+
 
 ## 分布式幂等去重机制
 
