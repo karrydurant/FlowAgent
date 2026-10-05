@@ -1,6 +1,8 @@
 # 整体定位
 
-是 FlowAgent 中 A2A 会话体系的任务执行派发器。它的核心职责是：接收投递过来的会话消息，
+是 FlowAgent 中 A2A 会话体系的任务执行派发器。
+
+它的核心职责是：接收投递过来的会话消息，
 筛选出需要目标 Agent 实际执行的消息，在独立线程池中调用目标 Agent 完成任务，最终将执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
 
 # 三个核心设计目标
@@ -108,12 +110,19 @@ private boolean markHandled(String messageId) {
 
 ## 关键设计细节
 
-TTL约束：`handledTtlSeconds` 必须大于 `dispatchTimeoutSeconds`（默认是 10 倍），
+1.TTL约束：
+
+`handledTtlSeconds` 必须大于 `dispatchTimeoutSeconds`（默认是 10 倍），
 否则标记会在执行还没结束时过期，重放就能挤进来跑第二遍，闸门直接失效。
 
-Fail-Open 降级策略：Redis 异常时不阻断执行，直接放行但累计计数。如果 Redis 抖动就停止干活，会导致大量委派变成永久死消息。配套 `dedupeFailures` 计数器：专门记录放行次数
+2.Fail-Open 降级策略：
 
-键指 Redis 幂等闸门的 Key。常规分布式消息框架一般采用 `sessionId + messageId` 组合键：目的是将相同 messageId、不同会话的消息视作两条独立消息，相互隔离互不干扰，用会话 + 消息 ID 联合唯一标识一条会话消息。
+Redis 异常时不阻断执行，直接放行但累计计数。如果 Redis 抖动就停止干活，会导致大量委派变成永久死消息。配套 `dedupeFailures` 计数器：专门记录放行次数
+
+3.Redis 幂等闸门的 Key：
+
+常规分布式消息框架一般采用 `sessionId + messageId` 组合键：目的是将相同 messageId、不同会话的消息视作两条独立消息，相互隔离互不干扰，用会话 + 消息 ID 联合唯一标识一条会话消息。
+
 但 PeerDispatcher 做了简化：直接使用messageId 单独作为幂等 Key，不再拼接 sessionId。
 理由：只有`REQUEST`类型消息才会进入 PeerDispatcher 执行。REQUEST 消息携带`toAgent`，代表这条消息是定向投递给单个 Agent，不属于广播消息。不存在一条消息同时发给多个 Agent 的场景，也就不会出现经典陷阱：第一个 Agent 处理完成写入 Redis 标记，后续其他 Agent 拿到同一个 messageId，误判消息已处理而直接跳过执行。
 
