@@ -1,13 +1,13 @@
 # 整体定位
 
 是 FlowAgent 中 A2A 会话体系的任务执行派发器。它的核心职责是：接收投递过来的会话消息，
-筛选出需要目标 Agent 实际执行的消息类型，在独立线程池中调用目标 Agent 完成任务，最终将执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
+筛选出需要目标 Agent 实际执行的消息，在独立线程池中调用目标 Agent 完成任务，最终将执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
 
 # 三个核心设计目标
 
 防循环：Agent 消息循环 + 组件依赖循环
 
-幂等性保障：同一条消息无论被唤醒多少次，保证只执行一次
+幂等性保障：同一条消息无论被投递多少次，保证只执行一次
 
 故障隔离与可观测：执行逻辑与投递逻辑解耦，异常不扩散，故障类型可被精准监控
 
@@ -64,12 +64,13 @@ markHandled()：标明"这条消息由我接手"
 
 ```java
 private boolean markHandled(String messageId) {
-    if (messageId==null) {
+    if (messageId == null) {
+        // 没有 id 就没有去重的依据。放行而不是拦住：拦住等于把一条正常消息丢掉
         return true;
     }
     try {
-        RBucket<String> guard=redissonClient.getBucket(
-                CacheConstants.A2A_SESSION_HANDLED+messageId);
+        RBucket<String> guard = redissonClient.getBucket(
+                CacheConstants.A2A_SESSION_HANDLED + messageId);
         if (guard.trySet(RUNNING, handledTtlSeconds, TimeUnit.SECONDS)) {
             return true;
         }
@@ -78,8 +79,9 @@ private boolean markHandled(String messageId) {
         }
         return guard.trySet(RUNNING, handledTtlSeconds, TimeUnit.SECONDS);
     } catch (Exception e) {
-        long n=dedupeFailures.incrementAndGet();
-        if (n==1 || n%100==0) {
+        long n = dedupeFailures.incrementAndGet();
+        if (n == 1 || n % 100 == 0) {
+            // 计数逐次，日志限流（与 CostTracker#record 同一写法）
             log.warn("[A2A] 幂等闸读不到，本次放行不做去重 | 累计 {} 次 | message={} | error={}",
                     n, messageId, e.toString());
         }
@@ -157,6 +159,52 @@ this.pool = new ThreadPoolExecutor(
 有界队列 200：做流量削峰，应对瞬时突刺，不会直接拒绝。
 
 守护线程：不阻塞 JVM 正常退出
+
+## 主处理流程
+
+**dispatch()：入口方法**
+
+接收消息、准备派发的那个调用方线程（主线程）先做幂等检查，检查通过之后，才把任务丢进线程池，而不是在每个子线程执行任务前检查一遍
+
+提交失败的处理：线程池满时，先释放幂等标记，再抛出 `DELIVER_FAILED` 异常（503），不能让一次过载变成永久死消息。
+
+立即返回：AgentA（投递方）发 HTTP 请求，把会话消息推给 AgentB 的 PeerDispatcher。B 把任务丢进内部线程池后，立刻 HTTP 响应返回给 AgentA：`200 OK / 接收成功`
+
+**handle()：核心处理逻辑**
+
+返回值是 settled（是否终态），而非 "业务成功与否"。
+
+消息读不到，settled=true，重投也读不到
+
+消息类型不在可执行集合 → `settled=true`，本就不该执行
+
+广播消息无指定执行者 → `settled=true`，重投也还是没有执行者
+
+**runAgent()：执行目标 Agent**
+
+调用本进程的 `POST /agents/{agentId}/run` 端点，复用现有 Agent 执行入口，不重复实现一套执行逻辑。
+
+原样传递调用方的业务 `context`，追加 `a2a.delegationDepth` 委派深度，用于限制调用链长度，防止无限嵌套委派。
+
+异常兜底：任何执行失败都封装成 `success=false` 的结构化结果返回，而不是向外抛异常
+
+**replyTo()：回写结果到会话**
+
+根据请求类型自动推导回复类型。
+
+回复成功送达 → `settled=true`，无论业务成败
+
+会话已关闭（`SESSION_CLOSED`）→ `settled=true`，会话不会复活，重投无意义
+
+其他投递失败（网络抖动、网关重启等）→ `settled=false`，标记为 FAILED，允许上游重投
+
+## 监控与可观测性
+
+两个独立计数器，分开统计，对应两种完全不同的故障方向：
+
+dedupeFailures：幂等闸失效（Redis 异常）放行的累计次数，持续增长说明 Redis 链路有问题
+
+retryableFailures：执行完成但回复投递失败、标记为 FAILED 的累计次数，持续增长说明回写链路有问题
 
 
 
