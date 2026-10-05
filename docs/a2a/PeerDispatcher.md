@@ -2,33 +2,81 @@
 
 是 FlowAgent 中 A2A 会话体系的任务执行派发器。
 
-它的核心职责是：接收投递过来的会话消息，
-筛选出需要目标 Agent 实际执行的消息，在独立线程池中调用目标 Agent 完成任务，最终将执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
+它的核心职责是：
+
+1.接收投递过来的会话消息
+
+2.筛选出需要目标 Agent 实际执行的消息
+
+3.在独立线程池中调用目标 Agent 完成任务
+
+4.最终将执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
 
 # 三个核心设计目标
 
-防循环：Agent 消息循环 + 组件依赖循环
+1.防循环：Agent 消息循环 + 组件依赖循环
 
-幂等性保障：同一条消息无论被投递多少次，保证只执行一次
+2.幂等性保障：同一条消息无论被投递多少次，保证只被执行一次
 
-故障隔离与可观测：执行逻辑与投递逻辑解耦，异常不扩散，故障类型可被精准监控
+3.故障隔离与可观测：执行逻辑与投递逻辑解耦，异常不扩散，故障类型可被精准监控
 
 ## 防止 Agent 间循环调用
 
-可执行消息白名单
+可执行消息白名单如下：
 
 ```java
 private static final Set<A2aMessage.MessageKind> EXECUTABLE_KINDS =
         EnumSet.of(A2aMessage.MessageKind.REQUEST, A2aMessage.MessageKind.SOLICIT);
 ```
 
-仅 REQUEST（委派任务）、SOLICIT（征询意见） 两种消息会触发实际执行 -- 这两类都要对方 Agent 运行推理后才能给答复。
+由此可见，仅 REQUEST（委派任务）、SOLICIT（征询意见） 两种消息会触发实际执行 -- 这两类都要对方 Agent 运行推理后才能给答复。
 
-执行完成后会回投回复消息，而回复消息不在可执行集合里，链路到此自动终止。
+执行完成后回投的回复消息不在可执行集合里，链路到此自动终止，不会出现 Agent 消息循环。
 
 ## 防止组件循环依赖
 
 回写走 HTTP 而非直接注入：
+
+先来看一下二者分别可以如何实现：
+
+```java
+//直接注入就是往 PeerDispatcher 的构造器里加一个参数
+public PeerDispatcher(SessionStore store, SessionManager sessionManager, ...) {
+    this.sessionManager = sessionManager;
+}
+//这样回写就成了一个普通的 Java 方法调用
+private boolean replyTo(...) {
+    A2aMessage reply = A2aMessage.builder()....build();
+    sessionManager.post(sessionId, reply);   // 同一个 JVM 里的方法调用
+    return true;
+}
+//同一个线程，直接进 SessionManager.post()的方法体
+//参数是已经构造好的对象（不是 JSON）
+//异常是原样的 Java 异常往上抛，没有任何序列化、网络、超时、签名。
+```
+
+``java
+//把「写消息」这件事换成了「向http://localhost:8080/a2a/sessions/{id}/messages 发一个POST」
+//具体回写路径
+A2aMessage reply=A2aMessage.builder()
+        .fromAgentId(target).toAgentId(request.getFromAgentId())
+        .kind(replyKind).replyTo(request.getMessageId()).payload(result)
+        .build();
+post("/a2a/sessions/" + sessionId + "/messages", toBody(reply), dispatchTimeoutSeconds, sessionId);
+//toBody() 把 A2aMessage 拍成一个 Map（null字段不发，让服务端补默认）——因为 HTTP 上没有类型，只能传 JSON。
+
+//然后进post()：
+String payload = JsonUtil.toJson(body);          // 序列化一次
+HttpRequest.Builder builder = HttpRequest.newBuilder()
+        .uri(URI.create(localBaseUrl + path))     // 本机地址
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(payload))
+        .timeout(Duration.ofSeconds(timeoutSeconds));
+signature.headersFor(scope, payload).forEach(builder::header);   // HMAC签名头
+HttpResponse<String> response = httpClient.send(builder.build(),
+        HttpResponse.BodyHandlers.ofString());
+//请求打出去之后，本实例的 A2aController 收到它、当作一个普通的外部调用者处理
+```
 
 当 PeerDispatcher 执行完任务、需要把回复写回会话时，如果直接注入 SessionManager，调用它的 `post()` / `deliver()` 方法把回复消息发出去，这时 PeerDispatcher 就必须依赖 SessionManager 了。
 
