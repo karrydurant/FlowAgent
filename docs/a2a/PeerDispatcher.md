@@ -11,7 +11,7 @@
 
 故障隔离与可观测：执行逻辑与投递逻辑解耦，异常不扩散，故障类型可被精准监控
 
-## 防环设计
+## 防止 Agent 间循环调用
 
 可执行消息白名单
 
@@ -22,32 +22,45 @@ private static final Set<A2aMessage.MessageKind> EXECUTABLE_KINDS =
 
 仅 REQUEST（委派任务）、SOLICIT（征询意见） 两种消息会触发实际执行 -- 这两类都要对方 Agent 运行推理后才能给答复。
 
-这是防循环的核心。执行完成后会回投回复消息，而回复消息不在可执行集合里，链路到此自动终止。
+执行完成后会回投回复消息，而回复消息不在可执行集合里，链路到此自动终止。
 
-另外回复类型是由请求决定的：
+## 防止组件循环依赖
 
-REQUEST->REPLY
+回写走 HTTP 而非直接注入：
 
-SOLICIT->PROPOSE（立场表态）
+当 PeerDispatcher 执行完任务、需要把回复写回会话时，如果直接注入 SessionManager，调用它的 `post()` / `deliver()` 方法把回复消息发出去，这时 PeerDispatcher 就必须依赖 SessionManager 了。
 
-回写走 HTTP 而非直接注入
+两个类互相持有对方的引用、互相依赖对方的方法，这就是典型的循环依赖。
 
+它带来的问题有：
+
+1.在 Spring 等依赖注入容器中，构造器注入的循环依赖会直接导致应用启动失败；即使使用字段注入绕过初始化，也会带来代理失效、初始化顺序异常等隐患。
+
+2.这会打破「消息只能通过会话 API 写入会话」的架构约束。PeerDispatcher 相当于拿到了 “后门”，可以绕开 SessionManager 层的签名校验、配额预算、审计日志等逻辑直接写消息，破坏了会话写入的统一管控。
+
+**为什么走 HTTP 就能避免组件循环依赖**
+
+走 HTTP 调用本实例的 `/a2a/sessions/{id}/messages` 接口，本质是用公开 API 层把反向依赖解耦：
+
+PeerDispatcher 不再直接持有 SessionManager 对象，只依赖通用的 HttpClient 和本地地址配置
+
+反向的 “写消息” 操作，和外部调用者走完全相同的公开接口，经过完整的校验、审计、预算控制
 
 ## 分布式幂等去重机制
 
 基于 Redis 实现分布式幂等闸
 
-### 三种状态定义
+三种状态定义
 
 | 状态 | 含义 | 重放行为 |
 | ---- | ---- | ---- |
-| RUNNING | 已认领、正在执行中，未到终态 | 直接拦截 | 
-| SUCCEEDED | 执行完成且回复已送达（无论业务成功失败） | 永久拒绝重放 |
-| FAILED | 执行完成但回复投递失败 | 允许重投抢回、重新执行 |
+| RUNNING | 已认领、正在执行中，未到终态 | 拦截重复投递，不允许抢执行权 | 
+| SUCCEEDED | 执行完成且回复已送达（无论业务成功失败） | 永久拒绝重新投递，禁止抢执行权 |
+| FAILED | 执行完成但投递回复失败 | 允许重新投递请求，可抢回执行权（只做重试投递回复） |
 
-### markHandled():三步原子认领逻辑
+markHandled()：标明"这条消息由我接手" 
 
-抢占 "这条消息由我接手" 的原子操作，三步设计完全规避竞态窗口：
+三步设计完全规避竞态窗口：
 
 ```java
 private boolean markHandled(String messageId) {
@@ -79,38 +92,34 @@ private boolean markHandled(String messageId) {
 
 如果键不存在（没人认领过）或已过期，直接设置为 `RUNNING` 并写入 TTL，抢到则返回 true。
 
-用 `trySet` 而非 `get+set`：避免两步之间的竞态窗口，防止并发重放同时读到 null。
+用 `trySet` 而非 `get+set`：避免两步之间的竞态窗口，防止并发重放（多条重复消息几乎同一时刻并发到达）同时读到 null。
 
-值与 TTL 一次原子写入：避免 `set+expire` 分两次命令产生的时间窗口。
+值与 TTL 一次原子写入：避免 `set+expire` 分两次命令产生时间窗口。
 
 第二步 compareAndSet(FAILED, RUNNING):
 
-如果上一次执行完但回复没送达（状态为 FAILED），允许抢回重新执行。
+如果上一次执行完但回复没送达（状态为 FAILED），允许抢回执行权重新投递回复。
 
 直接使用 CAS，不用先 get 再判断，减少一次 Redis 往返，同时避免读到的值在判断时过期。
 
-第三步 再次 trySet(RUNNING)：
+第三步 再次 trySet(RUNNING)：只处理 “第一步返回 false、到第二步之间 TTL 恰好到期” 的极端边界场景。
 
-只处理 “第一步返回 false、到第二步之间 TTL 恰好到期” 的极端边界场景。
-
-整个逻辑最多两次 `trySet` + 一次 CAS，必然终止，无循环风险。
-
-### 关键设计细节
+## 关键设计细节
 
 TTL约束：`handledTtlSeconds` 必须大于 `dispatchTimeoutSeconds`（默认是 10 倍），
 否则标记会在执行还没结束时过期，重放就能挤进来跑第二遍，闸门直接失效。
 
-Fail-Open 降级策略：Redis 异常时不阻断执行，直接放行但累计计数。
+Fail-Open 降级策略：Redis 异常时不阻断执行，直接放行但累计计数。如果 Redis 抖动就停止干活，会导致大量委派变成永久死消息。配套 `dedupeFailures` 计数器：专门记录放行次数
 
-如果 Redis 抖动就停止干活，会导致大量委派变成永久死消息。
+键指 Redis 幂等闸门的 Key。常规分布式消息框架一般采用 `sessionId + messageId` 组合键：目的是将相同 messageId、不同会话的消息视作两条独立消息，相互隔离互不干扰，用会话 + 消息 ID 联合唯一标识一条会话消息。
+但 PeerDispatcher 做了简化：直接使用messageId 单独作为幂等 Key，不再拼接 sessionId。
+理由：只有`REQUEST`类型消息才会进入 PeerDispatcher 执行。REQUEST 消息携带`toAgent`，代表这条消息是定向投递给单个 Agent，不属于广播消息。不存在一条消息同时发给多个 Agent 的场景，也就不会出现经典陷阱：第一个 Agent 处理完成写入 Redis 标记，后续其他 Agent 拿到同一个 messageId，误判消息已处理而直接跳过执行。
 
-配套 `dedupeFailures` 计数器：专门记录放行次数
-
-### markSettled()：终态写入
+## markSettled()：终态写入
 
 用 compareAndSet(RUNNING, state) 而非直接 set：
 
-引入了 FAILED 可回收机制，可能出现 "执行超时 -> 重投抢回并跑完 -> 旧执行回头写终态" 的场景，无条件 set
+可能出现 "执行超时 -> 重投抢回并跑完（这里的重投是靠外部发起的） -> 旧执行回头写终态" 的场景，无条件 set
 会覆盖新一轮的 RUNNING 状态
 
 CAS 以 “自己还在 RUNNING” 为条件，迟到的旧执行者静默退场，不影响新执行。
@@ -120,7 +129,7 @@ CAS 以 “自己还在 RUNNING” 为条件，迟到的旧执行者静默退场
 
 Redis 异常只打 WARN 日志、不向上抛出：执行已经结束，不能因为标记失败把业务结果变成异常。
 
-### releaseHandled()：标记释放
+releaseHandled()：标记释放
 
 线程池拒绝任务时，必须删除已认领的标记，否则这条消息会被永久标记为 “已处理”，变成再也不会被执行的死消息。
 
@@ -148,5 +157,7 @@ this.pool = new ThreadPoolExecutor(
 有界队列 200：做流量削峰，应对瞬时突刺，不会直接拒绝。
 
 守护线程：不阻塞 JVM 正常退出
+
+
 
 
