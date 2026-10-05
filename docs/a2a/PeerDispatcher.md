@@ -55,7 +55,7 @@ private boolean replyTo(...) {
 //异常是原样的 Java 异常往上抛，没有任何序列化、网络、超时、签名。
 ```
 
-``java
+```java
 //把「写消息」这件事换成了「向http://localhost:8080/a2a/sessions/{id}/messages 发一个POST」
 //具体回写路径
 A2aMessage reply=A2aMessage.builder()
