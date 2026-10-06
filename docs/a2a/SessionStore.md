@@ -53,6 +53,7 @@ public long append(A2aMessage message) {
     return seq;
 }
 
+// 读取序号大于 afterSeq 的所有增量消息，按 seq 升序返回，是消费端拉取新消息的核心方法 
 public List<A2aMessage> readAfter(String sessionId, long afterSeq) {
     List<String> raw=redissonClient.<String>getList(msgKey(sessionId)).readAll();
     if (raw.isEmpty()) {
@@ -73,8 +74,14 @@ public long currentSeq(String sessionId) {
 }
 
 private long nextSeq(String sessionId) {
+    // 获取该会话对应的分布式原子长整型计数器
     RAtomicLong counter=redissonClient.getAtomicLong(seqKey(sessionId));
+    // 原子自增 1 并返回新值
+    // 这是 Redis 提供的原子操作，多服务实例并发调用也能保证序号唯一且严格递增，不会出现重复或跳号
+    // 之所以不使用本地 AtomicLong 是因为：会话是跨进程的，多个服务实例都可以往同一个会话投递消息
+    // 必须用分布式原子计数器才能保证全局序号唯一。
     long seq=counter.incrementAndGet();
+    // 每次分配序号都同步续期计数器的 TTL
     counter.expire(ttl());
     return seq;
 }
