@@ -293,11 +293,11 @@ public long inboxSize(String agentId) {
 
 队列元素：指针字符串 sessionId:seq，只存位置引用，不存完整消息
 
-pushInbox 投递指针：往目标 Agent 的队列尾部追加一条指针。
+pushInbox 投递指针：
 
-消息本体和指针是两次写入，存在 "消息在，指针不在" 的短暂窗口，但属于可接受风险。
+往目标 Agent 的队列尾部追加一条指针。消息本体和指针是两次写入，存在 "消息在，指针不在" 的短暂窗口，但属于可接受风险。
 
-drainInbox 批量消费
+drainInbox 批量消费：
 
 从队列头部逐个 `poll` 指针（原子消费，不会重复），最多拉取 limit 条。
 
