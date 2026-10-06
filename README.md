@@ -1,5 +1,21 @@
 # FlowAgent 
 
+<p>
+  <img alt="Java" src="https://img.shields.io/badge/Java-17-orange?logo=openjdk&logoColor=white">
+  <img alt="Spring Boot" src="https://img.shields.io/badge/Spring%20Boot-3.2.5-6DB33F?logo=springboot&logoColor=white">
+  <img alt="Spring AI" src="https://img.shields.io/badge/Spring%20AI-1.0.0-6DB33F?logo=spring&logoColor=white">
+  <img alt="Maven" src="https://img.shields.io/badge/Maven-3.9-C71A36?logo=apachemaven&logoColor=white">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white">
+</p>
+<p>
+  <img alt="Redis" src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white">
+  <img alt="Neo4j" src="https://img.shields.io/badge/Neo4j-5-008CC1?logo=neo4j&logoColor=white">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-16%20+%20pgvector-336791?logo=postgresql&logoColor=white">
+  <img alt="MySQL" src="https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+</p>
+
+
 ### 项目定位
 
 一个关联魔搭的简易多 Agent 工作流搭建与协作平台。输入自己的魔搭访问令牌，就能在创建智能体时为智能体配置模型，不同模型适配不同任务，更好发挥多Agent的优势（目前仅做到全局统一模型），给他们装备魔搭上你事先部署好的工具（[也可以只用 HTTP 引入其它工具](docs/usehttp.md)），然后进行任务的编排。
