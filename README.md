@@ -4,6 +4,23 @@
 
 一个关联魔搭的简易多 Agent 工作流搭建与协作平台。输入自己的魔搭访问令牌，就能在创建智能体时为智能体配置模型，不同模型适配不同任务，更好发挥多Agent的优势（目前仅做到全局统一模型），给他们装备魔搭上你事先部署好的工具（[也可以只用 HTTP 引入其它工具](docs/usehttp.md)），然后进行任务的编排。
 
+### 启动项目
+
+```bash
+# 1. 起中间件
+docker-compose up -d
+
+# 2. 编译
+mvn clean install -DskipTests
+
+# 3. 配 LLM key（从网页填更省事，或环境变量）
+#    网页开了之后，首页「全局大模型」卡片填 key、选模型即可
+
+# 4. 启动
+mvn spring-boot:run -pl flowagent-server -Dspring-boot.run.profiles=dev,local
+
+```
+
 ### 使用说明
 
 1.输入你的魔搭令牌后，可以在 "全局大模型" 卡片查看有哪些可以接入的模型。
