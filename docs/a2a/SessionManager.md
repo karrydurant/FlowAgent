@@ -4,6 +4,18 @@
 
 A2A 协议的会话核心服务，负责创建会话、消息投递、会话生命周期管理、成员准入、跨实例唤醒、回复去重
 
+# 整体角色
+
+SessionStore：Redis 存储层，会话、消息、收件箱、去重锁都在这里
+
+AgentRegistryService：Agent 注册中心，查询 Agent 卡片、能力、端点、是否接收委派
+
+PeerDispatcher：本地 Agent 消息执行派发器
+
+A2aSignature：A2A HTTP 唤醒请求签名，保证跨实例调用安全
+
+HttpClient：JDK 原生 HTTP 客户端，用来调用其它实例的 /wake 唤醒接口
+
 # 设计思想
 
 1.会话 open：先校验全部成员，全部合法才创建会话
@@ -36,7 +48,9 @@ public class A2ASessionService {
 
 ·Agent 卡片配置了 a2aEndpoint 通信地址
 
-特殊角色：LOCAL_CONVEN
+特殊角色：LOCAL_CONVENER_AGENT_ID=a2a-convener
+
+这个召集人不是注册中心里的 Agent，代表外部调用方（工作流节点/用户），不需要去注册中心校验，端点直接是当前服务`localBaseUrl`，角色固定 CONVENER。
 
 2.消息投递 post：消息先写入共享 Redis，再唤醒接收方
 
