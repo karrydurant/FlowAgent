@@ -6,7 +6,7 @@
 
 ## 为什么必须用 Redis，不用内存 Map
 
-A2A 会话天然是跨进程的：发起方 Agent 和成员 Agent 可能部署在不同服务实例上，收件箱不共享就根本无法投递消息。同时避免了「内存 + Redis 双份数据」导致的状态漂移、重启后任务丢失、内存泄漏等问题。
+参与同一场协作的多个 Agent，很可能运行在不同的服务进程 / 不同机器上，本地内存彼此隔离，必须依赖共享存储才能完成消息投递。
 
 ## 三键同生共死原则
 
@@ -18,27 +18,19 @@ A2A 会话天然是跨进程的：发起方 Agent 和成员 Agent 可能部署�
 
 ·序号计数器(a2a:session:seq:)
 
-每次写入必须同步续期三者的 TTL，防止出现「消息还在、计数器重置」的情况 —— 一旦计数器从 1 重新分配，两条消息会撞上同一个序号，消费方的增量拉取会静默漏消息。
+每次写入必须同步续期三者的 TTL，如果三者 TTL 不同步续期，比如每次发消息只给消息列表续期，忘了给计数器续期，就会出现：
+
+计数器 Key 先到期，被 Redis 自动删除；消息列表 Key 还没到期，里面所有历史消息都还在；这时候再来一条新消息，执行 nextSeq() 分配序号，消息列表里已经有 seq=1、seq=2、seq=3 的历史消息，新分配的序号却从 1 开始。
+
+这回导致消费方的增量拉取 "静默漏消息"（`[seq=1, seq=2, seq=3, seq=4, seq=5, seq=1(新消息)]`，找 seq>5 的就会漏掉新消息）
 
 ## TTL 分层设计
 
-会话 TTL 默认 24 小时：作为协作留痕，支持人工隔天复盘
+会话 TTL 默认 24 小时：一条消息产生后，首先写入会话日志，模型需要推理时，再从会话里抽取最近的相关消息，组装成记忆上下文，会话过期删除了，记忆也就没有数据源了
 
 记忆 TTL 默认 30 分钟：作为模型工作集，越短越省资源
-两者刻意做了时长区分，适配不同的业务语义。
 
-## 会话元数据与反查索引
-
-负责会话的增删查，以及两个维度的索引维护
-
-| 方法 | 功能 | 关键设计 |
-| ---- | ---- | ---- |
-| save(A2aSession) | 写入/覆盖会话元数据，同步更新索引并续期 |  |
-| find(String) | 读取单个会话 |  |
-| remove(String) | 彻底清理会话所有资源 |  |
-|  |  |  |
-
-**索引机制**
+## 索引机制
 
 维护了两个反查索引，且每次 save 都会同步写入并续期：
 
@@ -48,7 +40,7 @@ A2A 会话天然是跨进程的：发起方 Agent 和成员 Agent 可能部署�
 
 ## 消息日志与序号分配器
 
-会话内消息追加、增量读取、原子序号分配
+保证会话内消息的全局有序性，提供增量拉取能力
 
 ```java
 public long append(A2aMessage message) {
@@ -62,9 +54,53 @@ public long append(A2aMessage message) {
 }
 
 public List<A2aMessage> readAfter(String sessionId, long afterSeq) {
-    
+    List<String> raw=redissonClient.<String>getList(msgKey(sessionId)).readAll();
+    if (raw.isEmpty()) {
+        return List.of();
+    }
+    List<A2aMessage> result=new ArrayList<>(raw.size());
+    for (String json:raw) {
+        A2aMessage m=JSON.parseObject(json, A2aMessage.class);
+        if (m != null && m.getSeq() > afterSeq) {
+            result.add(m);
+        }
+    }
+    return result;
+}
+
+public long currentSeq(String sessionId) {
+    return redissonClient.getAtomicLong(seqKey(sessionId)).get();
+}
+
+private long nextSeq(String sessionId) {
+    RAtomicLong counter=redissonClient.getAtomicLong(seqKey(sessionId));
+    long seq=counter.incrementAndGet();
+    counter.expire(ttl());
+    return seq;
 }
 ```
+
+序号分配器
+
+基于 RAtomicLong 实现原子自增，作为会话内消息的唯一逻辑序号（从 1 开始）：
+
+nextSeq()：分配下一个序号，同步续期 TTL
+
+currentSeq()：获取当前已分配的最大序号
+
+序号是消费方增量拉取的游标，是整个消息有序性的基石。
+
+消息追加 append
+
+·先分配全局序号，回填到 message 对象
+
+·向 `RList` 尾部追加消息 JSON
+
+·同步续期消息列表的 TTL
+
+增量读取
+
+读取 seq>afterSeq 的所有消息，按序号升序返回
 
 ## 回复去重（幂等防护）
 
