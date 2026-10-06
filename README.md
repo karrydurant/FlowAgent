@@ -8,18 +8,16 @@
 
 ```bash
 # 1. 起中间件
-docker-compose up -d
+docker compose up -d redis neo4j postgres mysql
 
 # 2. 编译
 mvn clean install -DskipTests
 
-# 3. 配 LLM key（从网页填更省事，或环境变量）
-#    网页开了之后，首页「全局大模型」卡片填 key、选模型即可
-
-# 4. 启动
+# 3. 启动
 mvn spring-boot:run -pl flowagent-server -Dspring-boot.run.profiles=dev,local
-
 ```
+
+然后浏览器开 `http://localhost:8080`
 
 ### 使用说明
 
