@@ -46,6 +46,26 @@ A2A 会话天然是跨进程的：发起方 Agent 和成员 Agent 可能部署�
 
 2.全局最近索引（RScoredSortedSet/ZSet）：A2A_SESSIONS_RECENT 前缀，score 为创建时间戳，支持按时间倒序分页
 
+## 消息日志与序号分配器
+
+会话内消息追加、增量读取、原子序号分配
+
+```java
+public long append(A2aMessage message) {
+    String sessionId=message.getSessionId();
+    long seq=nextSeq(sessionId);
+    message.setSeq(seq);
+    RList<String> list=redissonClient.getList(msgKey(sessionId));
+    list.add(JSON.toJSONString(message));
+    list.expire(ttl());
+    return seq;
+}
+
+public List<A2aMessage> readAfter(String sessionId, long afterSeq) {
+    
+}
+```
+
 ## 回复去重（幂等防护）
 
 解决分布式场景下重复投递、重复回复的核心问题。
