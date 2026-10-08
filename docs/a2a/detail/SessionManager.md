@@ -25,6 +25,75 @@ SessionManager 是 A2A 会话协议的 "应用服务层"—— 它把 "跨进程
 
 自己不存状态 —— 状态全在 Redis
 
+## post() 从进来到出去的完整流程图
+
+```mermaid
+flowchart TD
+    Start([POST /a2a/sessions/sessionId/messages]) --> A{message == null?}
+    A -- 是 --> A1[invalidParam 抛出]
+    A -- 否 --> B[requireOpenSession sessionId]
+
+    B --> B1{会话存在且 OPEN?}
+    B1 -- 不存在 --> B2[404 SESSION_NOT_FOUND]
+    B1 -- 已关闭 --> B3[409 SESSION_CLOSED]
+    B1 -- 通过 --> C
+
+    C{fromAgentId 为空?}
+    C -- 是 --> C1[invalidParam 抛出]
+    C -- 否 --> D{from 是成员?}
+    D -- 否 --> D1[403 NOT_A_MEMBER]
+    D -- 是 --> E
+
+    E{toAgentId != null?}
+    E -- 是 --> F{to == from?}
+    F -- 是 --> F1[409 SESSION_LOOP 自环]
+    F -- 否 --> G{to 是成员?}
+    G -- 否 --> G1[403 NOT_A_MEMBER]
+    G -- 是 --> H
+    E -- 否 广播 --> H
+
+    H{currentSeq >= 200?}
+    H -- 是 --> H1[429 MESSAGE_BUDGET_EXCEEDED]
+    H -- 否 --> I[fillDefaults 补 messageId/kind/时间戳]
+
+    I --> J{guardable?<br/>replyTo非空 && kind∈REPLY/PROPOSE}
+    J -- 否 --> L
+    J -- 是 --> K[store.claimReply message]
+    K --> K1{winner != null?}
+    K1 -- 是 重复 --> K2[replyDuplicatesSkipped++<br/>return winner 结束]
+    K1 -- 否 抢到 --> K3[claimed = true]
+    K -- 异常 Redis挂了 --> K4[replyGuardFailures++<br/>claimed = false fail-open]
+
+    K3 --> L[store.append message 分配seq]
+    K4 --> L
+    J -- 否 --> L
+
+    L --> L1{append成功?}
+    L1 -- 否 --> L2{claimed?}
+    L2 -- 是 --> L3[releaseQuietly 还槽]
+    L2 -- 否 --> L4[抛异常 结束]
+    L3 --> L4
+    L1 -- 是 --> M{claimed?}
+    M -- 是 --> M1[refreshQuietly 补seq到槽里]
+    M -- 否 --> N
+    M1 --> N
+
+    N[session.messageCount=seq<br/>session.updatedAt=now<br/>store.save]
+    N --> O[deliver 遍历每个接收方]
+
+    O --> P{INBOX_KINDS?<br/>且不是convener}
+    P -- 是 --> P1[store.pushInbox]
+    P -- 否 --> Q
+    P1 --> Q
+
+    Q{isSelf endpoint?}
+    Q -- 是 本实例 --> Q1[peerDispatcher.dispatch<br/>丢线程池 异步返回]
+    Q -- 否 远端 --> Q2[wake HTTP POST /wake<br/>失败抛 502 DELIVER_FAILED]
+
+    Q1 --> R[return message 带seq/messageId]
+    Q2 --> R
+```
+
 ## 准入原则
 
 如果某个 Agent 已经下线了，但会话还是建出来了，会发生什么？—— 有的成员收到消息、有的没收到，调用方拿到一个半截结论。
