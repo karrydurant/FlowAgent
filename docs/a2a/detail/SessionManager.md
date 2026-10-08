@@ -191,9 +191,13 @@ private void deliver(A2aSession session, A2aMessage message) {
         // 通知执行（本地和远端分叉）
         // isSelf 判断这个成员的 endpoint 是不是本实例地址
         if (isSelf(member.getEndpoint())) {
-            //
+            // 本实例：消息已经在共享 Redis 里了，不需要绕一圈 HTTP 通知自己。
+            // 直接交给 PeerDispatcher，丢进它的线程池就返回——不等 Agent 跑完。
             peerDispatcher.dispatch(session.getSessionId(), message.getMessageId());
         } else {
+            // 远端实例：发 HTTP 请求叫醒对方。
+            // body 里只带元数据（sessionId/messageId/seq），不带消息本体——
+            // 本体已经在共享 Redis 里了，对方收到 wake 自己去读。
             wake(session, member, message);
         }
     }
@@ -214,12 +218,14 @@ private List<Member> recipients(A2aSession session, A2aMessage message) {
 }
 ```
 
-wake()
-
 ```java
+/**
+ * 向一个远端成员发 HTTP /wake 请求
+ */
 private void wake(A2aSession session, Member member, A2aMessage message) {
+    // 拼 URL：成员端点 + /sessions/{sessionId}/wake
     String url = member.getEndpoint() + "/sessions/" + session.getSessionId() + "/wake";
-
+    // body 只放元数据，不放消息本体
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("sessionId", session.getSessionId());
     body.put("messageId", message.getMessageId());
@@ -227,9 +233,12 @@ private void wake(A2aSession session, Member member, A2aMessage message) {
     body.put("fromAgentId", message.getFromAgentId());
     body.put("kind", message.getKind().name());
 
+    // 序列化成 JSON。只序列化一次——待签串和真正发出去的报文必须是同一个串，
+    // 签完再序列化一遍键序可能变，验签就对不上了。
     String payload = JsonUtil.toJson(body);
 
     try {
+        // 构造 HTTP POST 请求
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Content-Type", "application/json")
@@ -237,7 +246,7 @@ private void wake(A2aSession session, Member member, A2aMessage message) {
                 .header("X-A2A-Message", message.getMessageId())
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .timeout(Duration.ofSeconds(deliverTimeoutSeconds));
-
+        
         signature.headersFor(session.getSessionId(), payload).forEach(builder::header);
 
         HttpResponse<String> response = httpClient.send(builder.build(),
