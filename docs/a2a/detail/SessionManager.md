@@ -294,7 +294,17 @@ public A2aSession close(String sessionId) {
 
 **fail-closed**
 
-某个成员不在注册表，会话不存在，往已关闭会话 post，发给自己，发送方/接收方不是成员，消息超200条
+某个成员不在注册表
+
+会话不存在
+
+往已关闭会话 post
+
+发给自己
+
+发送方/接收方不是成员
+
+消息超200条
 
 **fail-open**
 
