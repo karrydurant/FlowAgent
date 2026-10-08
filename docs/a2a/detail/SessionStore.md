@@ -4,6 +4,64 @@
 
 这是 FlowAgent 多智能体体系中 A2A 会话的 Redis 存储层，基于 Redisson 客户端实现，完整封装了会话元数据、消息日志、序号分配、回复去重、Agent 收件箱五大核心能力。
 
+## 流程图
+
+```mermaid
+flowchart TD
+    CALL["SessionManager 调用"] --> ROUTE{"调哪个原语?"}
+
+    subgraph SAVE["① save(session) — 存会话"]
+        S1["写 session:{id} = JSON"]
+        S2{"有 fromRunId?"}
+        S2 -->|是| S3["SADD run-sessions:{runId} = sessionId"]
+        S2 -->|否| S4
+        S3 --> S4["ZADD recent = (score: createdAt, member: sessionId)"]
+        S4 --> S5["session / run-sessions / recent 三个 key 一起续 TTL"]
+    end
+
+    subgraph APPEND["② append(message) — 落盘一条消息"]
+        A1["nextSeq: RAtomicLong.incrementAndGet"]
+        A2["把 seq 回填到 message 对象"]
+        A3["msgs:{id} List.add(JSON)"]
+        A4["msgs key 续 TTL"]
+        A5["返回 seq"]
+    end
+
+    subgraph CLAIM["③ claimReply(message) — 抢去重槽"]
+        C1["replyKey = session:from:replyTo:digest(payload)"]
+        C2["trySet SETNX(key, JSON)"]
+        C3{"抢到?"}
+        C3 -->|是| C4["返回 null = 我抢到了"]
+        C3 -->|否| C5["slot.get() 读先到那条"]
+        C5 --> C6{"winner == null?<br/>(key 刚过期的边界)"}
+        C6 -->|是| C7["再 trySet 一次"]
+        C7 --> C8{"抢到?"}
+        C8 -->|是| C4
+        C8 -->|否| C9["返回 parse(winner)"]
+        C6 -->|否| C9
+    end
+
+    subgraph INBOX["④ pushInbox / drainInbox — 收件箱"]
+        P1["pushInbox: inbox:agent RQueue.add('sessionId:seq')"]
+        P2["续 TTL"]
+        D1["drainInbox: RQueue.poll() 原子取走 pointer"]
+        D2{"pointer 能解析出消息?"}
+        D2 -->|是| D3["readAfter(sessionId, seq-1) 里捞真消息"]
+        D3 --> D4["加入结果列表"]
+        D2 -->|否| D5["跳过, 丢弃"]
+        D4 --> D6{"达到 limit 或队列空?"}
+        D5 --> D6
+        D6 -->|否| D1
+        D6 -->|是| D7["返回消息列表"]
+    end
+
+    ROUTE -->|save| S1
+    ROUTE -->|append| A1
+    ROUTE -->|claimReply| C1
+    ROUTE -->|pushInbox| P1
+    ROUTE -->|drainInbox| D1
+```
+
 ## 为什么必须用 Redis，不用内存 Map
 
 参与同一场协作的多个 Agent，很可能运行在不同的服务进程 / 不同机器上，本地内存彼此隔离，必须依赖共享存储才能完成消息投递。
