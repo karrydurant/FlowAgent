@@ -4,9 +4,9 @@
 
 让跑在不同进程、不同机器上的 AI Agent 互相发消息、协作干活。
 
-## [架构图](a2a-structure.md)
+## [架构图](detail/a2a-structure.md)
 
-## 第一层 A2aController
+## [第一层 A2aController](detail/A2aController.md)
 
 它是这个模块唯一对外的 HTTP 入口。外部所有请求都先进它：
 
@@ -20,13 +20,13 @@
 
 ## 第二层 两个用例 Manager
 
-`DelegationManager`：单向委派。
+[DelegationManager](detail/DelegationManager.md)：单向委派。
 "你帮我干件事，干完把结果告诉我。"——它开个会话、投一条 REQUEST、然后死等一条 REPLY 回来。
  
-`NegotiationManager`：多人协商。
+[NegotiationManager](detail/NegotiationManager.md)：多人协商。
 "你们三个都说说自己的立场，我汇总一下。"—— 它多轮发 SOLICIT（征求意见），收 PROPOSE（各方立场），最后用 `NegotiationAggregator` 聚合成结论。
 
-## 第三层 SessionManager
+## [第三层 SessionManager](detail/SessionManager.md)
 
 它负责 4 件事：
 
@@ -40,7 +40,7 @@
 
 存数据找 SessionStore，执行找 PeerDispatcher
 
-## 第四层 PeerDispatcher
+## [第四层 PeerDispatcher](detail/PeerDispatcher.md)
 
 SessionManager 写完消息，如果接收方是本实例的 Agent，就直接调 PeerDispatcher.dispatch()。
 
@@ -48,20 +48,20 @@ SessionManager 写完消息，如果接收方是本实例的 Agent，就直接�
 
 它和 SessionManager 故意不互相依赖（避免循环依赖），回投结果走 HTTP 打自己的 /messages 接口。
 
-## 第五层 SessionStore
+## [第五层 SessionStore](detail/SessionStore.md)
 
 全模块唯一碰 Redisson 的类。`SessionManager` 想存会话、追加消息、抢去重槽、推收件箱，全部通过它（Redisson）。
 它不知道业务，只知道 "对象 → JSON → Redis key"。
 
 ## 数据模型
 
-`A2aMessage`：一条消息长什么样
+[A2aMessage](detail/A2aMessage.md)：一条消息长什么样
 
-`A2aSession`：一个会话长什么样
+[A2aSession](detail/A2aSession.md)：一个会话长什么样
 
-`Member`：一个成员长什么样
+[Member](detail/Member.md)：一个成员长什么样
 
-`NegotiationAggregator`：纯算法，聚合意见用
+[NegotiationAggregator](detail/NegotiationAggregator.md)：纯算法，聚合意见用
 
 它们没有业务方法，就是数据载体。
 
