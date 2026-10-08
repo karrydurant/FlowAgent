@@ -172,16 +172,26 @@ public A2aMessage post(String sessionId, A2aMessage message) {
 
 本实例直接调 `peerDispatcher.dispatch()`（丢线程池就返回）；远端发 HTTP `/wake`，body 里只放 sessionId/messageId/seq——不发消息本体，因为本体已经在 Redis 里了。
 
-deliver()
-
 ```java
+/**
+ * 投递入口：消息已经落盘了，现在逐个通知接收方
+ * 由 post() 在最后一步调用
+ */
 private void deliver(A2aSession session, A2aMessage message) {
+    // recipients() 算出这条消息实际该发给哪些人（广播展开 or 指定单个）
     for (Member member : recipients(session, message)) {
+        // 往收件箱放指针（不分本地远端，对每个成员都做）
+        // 只有 INBOX_KINDS（INFORM/PROPOSE/VOTE）才进收件箱
         if (INBOX_KINDS.contains(message.getKind())
                 && !LOCAL_CONVENER_AGENT_ID.equals(member.getAgentId())) {
+            // pushInbox 往 Redis 队列里写一条 "sessionId:seq" 指针，
+            // 不存消息本体，本体在消息日志里，指针只是个坐标。
             store.pushInbox(member.getAgentId(), session.getSessionId(), message.getSeq());
         }
+        // 通知执行（本地和远端分叉）
+        // isSelf 判断这个成员的 endpoint 是不是本实例地址
         if (isSelf(member.getEndpoint())) {
+            //
             peerDispatcher.dispatch(session.getSessionId(), message.getMessageId());
         } else {
             wake(session, member, message);
