@@ -39,18 +39,84 @@ SessionManager 是 A2A 会话协议的 "应用服务层"—— 它把 "跨进程
 
 ```java
 public A2aMessage post(String sessionId, A2aMessage message) {
+    if (message==null) {
+        throw FlowAgentException.invalidParam("消息体不能为空");
+    }
     //1.会话必须 open
     A2aSession session=requireOpenSession(sessionId);
     //2.发送方必须是成员
     String from=message.getFromAgentId();
-    if (from==null || from.isBlank()) throw invalidParam(...);  
+    if (from==null || from.isBlank()) {
+        throw FlowAgentException.invalidParam("发送方 fromAgentId 不能为空");
+    }
+    if (!session.hasMember(from)) {
+        throw FlowAgentException.of("NOT_A_MEMBER",
+                "发送方不在会话成员里: " + from, 403);
+    }
     //3.接收方校验
+    String to=message.getToAgentId();
+    if (to!=null) {
+        if (to.equals(from)) {
+            //自环：防的是配置事故（某个实例的 base-url 配成了另一个实例的地址，
+            //或成员表在传播中丢了），不是「正常链路会自转」
+            throw FlowAgentException.of("SESSION_LOOP",
+                    "接收方就是发送方自身，会形成自环: " + from, 409);
+        }
+        if (!session.hasMember(to)) {
+            throw FlowAgentException.of("NOT_A_MEMBER",
+                    "接收方不在会话成员里: " + to, 403);
+        }
+    }
     //4.消息预算
+    long delivered=store.currentSeq(sessionId);
+    if (delivered >= messageBudget) {
+        throw FlowAgentException.of("MESSAGE_BUDGET_EXCEEDED",
+                "会话 " + sessionId + " 已达消息预算 " + messageBudget + " 条", 429);
+    }
     //5.补默认字段
+    fillDefaults(message, sessionId);
     //6.回复去重闸
     boolean guardable=message.getReplyTo() != null && !message.getReplyTo().isBlank()
-            && REPLY
+            && REPLY_DEDUPE_KINDS.contains(message.getKind());
+    boolean claimed=false;
+    if (guardable) {
+        try {
+            A2aMessage winner=store.claimReply(message);
+            if (winner!=null) {
+                long n=replyDuplicatesSkipped.incrementAndGet();
+                log.warn("[A2A] 重复回复已拦下，返回先到的那条 | session={} | from={} | replyTo={} | 累计 {} 条",
+                            sessionId, message.getFromAgentId(), message.getReplyTo(), n);
+                    return winner;
+            }
+            claimed=true;
+        } catch (Exception e) {
+            long n = replyGuardFailures.incrementAndGet();
+            if (n == 1 || n % 100 == 0) {
+                // 计数逐次，日志限流（与 CostTracker#record 同一写法）
+                log.warn("[A2A] 回复去重闸读不到，本次放行不做去重 | 累计 {} 次 | session={} | replyTo={} | error={}",
+                        n, sessionId, message.getReplyTo(), e.toString());
+            }
+        }
+    }
     //7.落盘
+    long seq;
+    try {
+        seq=store.append(message);
+    } catch (RuntimeException e) {
+        if (claimed) {
+            releaseQuietly(message);
+        }
+        throw e;
+    }
+    if (claimed) {
+        refreshQuietly(message);
+    }
+    session.setMessageCount((int) seq);
+    session.setUpdatedAt(Instant.now());
+    store.save(session);
+
+    deliver(session, message);
+    return message;
 }
 ```
 
