@@ -27,7 +27,44 @@ SessionManager 是 A2A 会话协议的 "应用服务层"—— 它把 "跨进程
 
 ## 准入原则
 
+如果某个 Agent 已经下线了，但会话还是建出来了，会发生什么？—— 有的成员收到消息、有的没收到，调用方拿到一个半截结论。
 
+开会话时逐个把成员验完，任何一个不通过就抛异常，会话根本不创建
+
+## 怎么避免一条回复被写两遍
+
+网络唤醒可能重试两次、PeerDispatcher 可能超时重投，同一条 REPLY 如果写两遍，就多花一次 LLM 的钱。
+
+对 REPLY/PROPOSE 这两种 "答复类" 消息，落盘前先抢一个 Redis 槽，抢到才写，抢不到就把先到那条原样返回。
+
+```java
+public A2aMessage post(String sessionId, A2aMessage message) {
+    //1.会话必须 open
+    A2aSession session=requireOpenSession(sessionId);
+    //2.发送方必须是成员
+    String from=message.getFromAgentId();
+    if (from==null || from.isBlank()) throw invalidParam(...);  
+    //3.接收方校验
+    //4.消息预算
+    //5.补默认字段
+    //6.回复去重闸
+    boolean guardable=message.getReplyTo() != null && !message.getReplyTo().isBlank()
+            && REPLY
+    //7.落盘
+}
+```
+
+## 消息写完怎么让对方知道
+
+接收方可能在本实例，也可能在远端机器。本实例要绕一圈网络叫醒自己吗？
+
+本实例直接调 `peerDispatcher.dispatch()`（丢线程池就返回）；远端发 HTTP `/wake`，body 里只放 sessionId/messageId/seq——不发消息本体，因为本体已经在 Redis 里了。
+
+## 读消息分为几种
+
+人复盘要读完整记录，模型喂上下文只要未读 —— 这俩能合并成一个接口吗？
+
+不能。`messages()` 幂等、全量；`inbox()` 取走即消费、限量 20 条。
 
 ## 故障语义
 
@@ -57,5 +94,11 @@ SessionManager 是 A2A 会话协议的 "应用服务层"—— 它把 "跨进程
 
 **fail-open**
 
-去重闸`claimReply`读不到（Redis抖动），releaseReply失败（槽没还掉）
+去重闸`claimReply`读不到（Redis抖动）
+
+releaseReply失败（槽没还掉）
+
+refreshReply失败（槽里 seq 没补全）
+
+收件箱指针解析不出消息（会话过期了）
 
