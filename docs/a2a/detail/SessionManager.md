@@ -31,6 +31,56 @@ SessionManager 是 A2A 会话协议的 "应用服务层"—— 它把 "跨进程
 
 开会话时逐个把成员验完，任何一个不通过就抛异常，会话根本不创建
 
+1.入参校验：
+
+`topic` 不能为空
+
+`initiator` 不能为空
+
+`agentIds` 不能为空
+
+2.成员表构造：
+
+`initiator` 固定排第一位
+
+其余成员按调用方给的顺序追加，自动去重（空串、null 跳过）
+
+成员总数 > `maxSessionMembers`（默认 8）→ 抛 `SESSION_DEPTH_EXCEEDED`(422)
+
+3.每个成员的三连查（`resolveMember`）：
+
+注册表里查不到该 agentId → 抛 `AGENT_UNAVAILABLE`(404)
+
+查到了但 `acceptsDelegation=false` → 抛 `AGENT_NOT_ACCEPTING_DELEGATION`(409)
+
+有卡但 `a2aEndpoint` 为空 → 抛 `AGENT_ENDPOINT_MISSING`(422)
+
+全部通过 → 生成 `Member`，endpoint 在此刻快照进对象；role 由调用方 `roles` 指定，缺省 `PARTICIPANT`
+
+4.本地召集人例外（`openConvened` 走的分支）：
+
+发起方那个成员不查注册表
+
+endpoint 直接填 `localBaseUrl`
+
+role 固定为 `CONVENER`
+
+`localBaseUrl` 本身为空 → 抛 `A2A_LOCAL_BASE_URL_MISSING`(500)
+
+5.落盘时机（最关键的一条）：
+
+所有成员全部验完、session 对象构造完毕之后，才一次 `store.save()`
+
+前面任何一步抛异常 → Redis 里什么都没有，会话根本不创建
+
+6.新会话初始状态
+
+`status = OPEN`
+
+`messageCount = 0`
+
+`sessionId` 服务端生成（`a2a-session-` 前缀 + UUID 前 12 位）
+
 ## 怎么避免一条回复被写两遍
 
 网络唤醒可能重试两次、PeerDispatcher 可能超时重投，同一条 REPLY 如果写两遍，就多花一次 LLM 的钱。
