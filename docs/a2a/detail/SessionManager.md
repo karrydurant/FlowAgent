@@ -172,6 +172,91 @@ public A2aMessage post(String sessionId, A2aMessage message) {
 
 本实例直接调 `peerDispatcher.dispatch()`（丢线程池就返回）；远端发 HTTP `/wake`，body 里只放 sessionId/messageId/seq——不发消息本体，因为本体已经在 Redis 里了。
 
+deliver()
+
+```java
+private void deliver(A2aSession session, A2aMessage message) {
+    for (Member member : recipients(session, message)) {
+        if (INBOX_KINDS.contains(message.getKind())
+                && !LOCAL_CONVENER_AGENT_ID.equals(member.getAgentId())) {
+            store.pushInbox(member.getAgentId(), session.getSessionId(), message.getSeq());
+        }
+        if (isSelf(member.getEndpoint())) {
+            peerDispatcher.dispatch(session.getSessionId(), message.getMessageId());
+        } else {
+            wake(session, member, message);
+        }
+    }
+}
+```
+
+recipients()
+
+```java
+private List<Member> recipients(A2aSession session, A2aMessage message) {
+    if (message.getToAgentId() == null) {
+        return session.getMembers().stream()
+                .filter(m -> !Objects.equals(m.getAgentId(), message.getFromAgentId()))
+                .toList();
+    }
+    Member target = session.member(message.getToAgentId());
+    return target == null ? List.of() : List.of(target);
+}
+```
+
+wake()
+
+```java
+private void wake(A2aSession session, Member member, A2aMessage message) {
+    String url = member.getEndpoint() + "/sessions/" + session.getSessionId() + "/wake";
+
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("sessionId", session.getSessionId());
+    body.put("messageId", message.getMessageId());
+    body.put("seq", message.getSeq());
+    body.put("fromAgentId", message.getFromAgentId());
+    body.put("kind", message.getKind().name());
+
+    String payload = JsonUtil.toJson(body);
+
+    try {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("X-A2A-Session", session.getSessionId())
+                .header("X-A2A-Message", message.getMessageId())
+                .POST(HttpRequest.BodyPublishers.ofString(payload))
+                .timeout(Duration.ofSeconds(deliverTimeoutSeconds));
+
+        signature.headersFor(session.getSessionId(), payload).forEach(builder::header);
+
+        HttpResponse<String> response = httpClient.send(builder.build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() / 100 != 2) {
+            throw FlowAgentException.of("DELIVER_FAILED",
+                    "唤醒 " + member.getAgentId() + " 返回 HTTP " + response.statusCode()
+                            + "，消息已落盘但未送达", 502);
+        }
+    } catch (IOException e) {
+        throw FlowAgentException.of("DELIVER_FAILED",
+                "唤醒 " + member.getAgentId() + " 失败（" + url + "）: " + e.getMessage(), 502);
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw FlowAgentException.of("DELIVER_FAILED",
+                "唤醒 " + member.getAgentId() + " 被中断", 502);
+    }
+}
+```
+
+isSelf()
+
+```java
+private boolean isSelf(String endpoint) {
+    return localBaseUrl != null && !localBaseUrl.isBlank() && endpoint.startsWith(localBaseUrl);
+}
+```
+
 ## 读消息分为几种
 
 读消息分为 messages, inbox
