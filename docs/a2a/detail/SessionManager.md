@@ -39,85 +39,131 @@ SessionManager 是 A2A 会话协议的 "应用服务层"—— 它把 "跨进程
 
 ```java
 public A2aMessage post(String sessionId, A2aMessage message) {
-    if (message==null) {
+    // 消息体本身不能是 null，否则后面读 fromAgentId 会 NPE
+    if (message == null) {
         throw FlowAgentException.invalidParam("消息体不能为空");
     }
-    //1.会话必须 open
-    A2aSession session=requireOpenSession(sessionId);
-    //2.发送方必须是成员
-    String from=message.getFromAgentId();
-    if (from==null || from.isBlank()) {
+
+    // ===== 第 1 步：会话准入 =====
+    // 会话必须存在、且状态是 OPEN。已关闭/已过期的会话拒收，
+    // 内部会调 requireSession 先查存在，再查状态。
+    A2aSession session = requireOpenSession(sessionId);
+
+    // ===== 第 2 步：校验发送方 =====
+    String from = message.getFromAgentId();
+    // fromAgentId 是必填，没填就是调用方请求体写错了
+    if (from == null || from.isBlank()) {
         throw FlowAgentException.invalidParam("发送方 fromAgentId 不能为空");
     }
+    // 发送方必须在会话成员表里——防止有人冒充一个不在群里的 Agent 发言
     if (!session.hasMember(from)) {
         throw FlowAgentException.of("NOT_A_MEMBER",
                 "发送方不在会话成员里: " + from, 403);
     }
-    //3.接收方校验
-    String to=message.getToAgentId();
-    if (to!=null) {
+
+    // ===== 第 3 步：校验接收方 =====
+    String to = message.getToAgentId();
+    // toAgentId 为 null 表示广播，不需要校验；只有指定了具体接收方才查
+    if (to != null) {
+        // 自己发给自己 = 自环。这不是正常业务会发生的，
+        // 防的是配置事故（base-url 配错、成员表传播丢了）
         if (to.equals(from)) {
-            //自环：防的是配置事故（某个实例的 base-url 配成了另一个实例的地址，
-            //或成员表在传播中丢了），不是「正常链路会自转」
             throw FlowAgentException.of("SESSION_LOOP",
                     "接收方就是发送方自身，会形成自环: " + from, 409);
         }
+        // 接收方也必须在成员表里，否则消息发不出去
         if (!session.hasMember(to)) {
             throw FlowAgentException.of("NOT_A_MEMBER",
                     "接收方不在会话成员里: " + to, 403);
         }
     }
-    //4.消息预算
-    long delivered=store.currentSeq(sessionId);
+
+    // ===== 第 4 步：消息预算闸 =====
+    // currentSeq 是这个会话已经分配到的最大序号（= 已发消息数）
+    // 超过 messageBudget（默认 200）就拒收，防止无限烧 LLM
+    long delivered = store.currentSeq(sessionId);
     if (delivered >= messageBudget) {
         throw FlowAgentException.of("MESSAGE_BUDGET_EXCEEDED",
                 "会话 " + sessionId + " 已达消息预算 " + messageBudget + " 条", 429);
     }
-    //5.补默认字段
+
+    // ===== 第 5 步：补服务端默认字段 =====
+    // 调用方可能没填 messageId/kind/时间戳/重要性，这里服务端补上。
+    // 调用方给的值一律尊重，只补空的。
     fillDefaults(message, sessionId);
-    //6.回复去重闸
-    boolean guardable=message.getReplyTo() != null && !message.getReplyTo().isBlank()
+
+    // ===== 第 6 步：回复去重闸 =====
+    // guardable = 这条消息是不是"答复类"（REPLY 或 PROPOSE），且带了 replyTo
+    // 只有答复类才需要去重——请求类（REQUEST/SOLICIT）重试是正常的，不去重
+    boolean guardable = message.getReplyTo() != null && !message.getReplyTo().isBlank()
             && REPLY_DEDUPE_KINDS.contains(message.getKind());
-    boolean claimed=false;
+    // claimed 标记"这个去重槽是不是我抢到的"，后面 append 失败要据此还槽
+    boolean claimed = false;
+
     if (guardable) {
         try {
-            A2aMessage winner=store.claimReply(message);
-            if (winner!=null) {
-                long n=replyDuplicatesSkipped.incrementAndGet();
+            // 抢槽：返回 null = 我抢到了，可以继续落盘；
+            // 返回非 null = 别人先到了，那个返回值就是先到的那条消息
+            A2aMessage winner = store.claimReply(message);
+            if (winner != null) {
+                // 重复消息：不落盘、不投递，直接把先到的那条返回给调用方
+                // 计数 +1，让运维知道这道闸真的挡下过东西
+                long n = replyDuplicatesSkipped.incrementAndGet();
                 log.warn("[A2A] 重复回复已拦下，返回先到的那条 | session={} | from={} | replyTo={} | 累计 {} 条",
-                            sessionId, message.getFromAgentId(), message.getReplyTo(), n);
+                        sessionId, message.getFromAgentId(), message.getReplyTo(), n);
                 return winner;
             }
-            claimed=true;
+            // 我抢到了槽位
+            claimed = true;
         } catch (Exception e) {
+            // Redis 挂了——fail-open：不去重了，照常落盘。
+            // 但要计数留痕，否则运维不知道这道闸今天其实是坏的。
+            // 日志限流：第 1 次和每 100 次打一条，避免刷屏
             long n = replyGuardFailures.incrementAndGet();
             if (n == 1 || n % 100 == 0) {
-                // 计数逐次，日志限流（与 CostTracker#record 同一写法）
                 log.warn("[A2A] 回复去重闸读不到，本次放行不做去重 | 累计 {} 次 | session={} | replyTo={} | error={}",
                         n, sessionId, message.getReplyTo(), e.toString());
             }
         }
     }
-    //7.落盘
+
+    // ===== 第 7 步：落盘 =====
     long seq;
     try {
-        seq=store.append(message);
+        // append 会分配一个会话内单调递增的 seq，并把消息写进 Redis 消息日志
+        seq = store.append(message);
     } catch (RuntimeException e) {
+        // 落盘失败了。如果刚才抢到了去重槽，必须把槽还回去——
+        // 不还的话，调用方重试时永远被"重复"挡住，直到 TTL 到期
         if (claimed) {
             releaseQuietly(message);
         }
+        // 原始异常继续往上抛，不吞
         throw e;
     }
+
+    // 如果抢到了槽，落盘时才分配到 seq——
+    // 但抢槽时写进槽里的 JSON 还没有 seq，这里补写进去，
+    // 否则后来者拿到的重复消息 seq=0，会被当成增量游标从头读整个会话
     if (claimed) {
         refreshQuietly(message);
     }
+
+    // ===== 第 8 步：刷新会话元数据 =====
+    // 消息数 +1，更新时间戳，写回会话元数据
     session.setMessageCount((int) seq);
     session.setUpdatedAt(Instant.now());
     store.save(session);
 
+    // ===== 第 9 步：投递 =====
+    // 落盘完成了，才开始通知接收方。
+    // deliver 内部会判断每个接收方是本实例还是远端，走不同路径。
     deliver(session, message);
+
+    // 返回带了 seq/messageId 的完整消息给调用方
     return message;
 }
+
 ```
 
 ## 消息写完怎么让对方知道
