@@ -86,7 +86,7 @@ public A2aMessage post(String sessionId, A2aMessage message) {
                 long n=replyDuplicatesSkipped.incrementAndGet();
                 log.warn("[A2A] 重复回复已拦下，返回先到的那条 | session={} | from={} | replyTo={} | 累计 {} 条",
                             sessionId, message.getFromAgentId(), message.getReplyTo(), n);
-                    return winner;
+                return winner;
             }
             claimed=true;
         } catch (Exception e) {
