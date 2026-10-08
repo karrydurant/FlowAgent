@@ -174,9 +174,9 @@ public A2aMessage post(String sessionId, A2aMessage message) {
 
 ## 读消息分为几种
 
-读消息分为 message, inbox
+读消息分为 messages, inbox
 
-message() 服务人（和等回复的调用方）
+**message() 服务人（和等回复的调用方）**
 
 它的实际调用方：
 
@@ -188,7 +188,7 @@ message() 服务人（和等回复的调用方）
 
 所以它是幂等的：`seq > afterSeq` 的消息，每次读都一样。
 
-inbox() 服务模型（ReAct 每轮推理）
+**inbox() 服务模型（ReAct 每轮推理）**
 
 `ReActAgent` 在每轮 Thought 之前，调一次 `GET /a2a/agents/{agentId}/inbox`，把里面的消息当成 "别人新告诉我的事" 塞进提示词。
 
@@ -206,9 +206,27 @@ inbox() 服务模型（ReAct 每轮推理）
 
 inbox() 取走即消费，正好解决这个问题：每条新消息模型只看一次，看完就从队列里消失，下次看到的都是 "真・新到的"。
 
+另外，也不是所有消息都进收件箱。只有 `INBOX_KINDS = {INFORM, PROPOSE, VOTE}` 这三种：
+
+`REQUEST`/`SOLICIT`：会直接唤醒对方跑 Agent（走 PeerDispatcher），不需要再进收件箱 —— 都已经叫醒你干活了，不用再提醒
+
+`REPLY`：是发起方同步轮询取走的（`awaitReply`），也不需要进收件箱
+
+`INFORM`/`PROPOSE`/`VOTE`：没人在等回复，但下次推理时该让模型知道 —— 所以进收件箱
+
 **为什么不能合并成一个接口**
 
+因为两个需求是矛盾的
 
+| | messages() | inbox() |
+|---|---|---|
+| 读完之后 | 数据不变 | 数据被删 |
+| 多次调用 | 返回相同结果 | 返回不同结果（第二次可能空） |
+| 限量 | 不限（全量） | 最多 20 条 |
+| 服务谁 | 人复盘 / 等回复的调用方 | 模型每轮推理 |
+| 类比 | 聊天记录 | 未读红点 |
+
+messages 是 "真相"，inbox 是 "通知"。真相要可重复读，通知要消费一次就完。
 
 ```java
 public List<A2aMessage> messages(String sessionId, long afterSeq) {
