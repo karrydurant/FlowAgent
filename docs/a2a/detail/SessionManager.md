@@ -288,29 +288,39 @@ private void wake(A2aSession session, Member member, A2aMessage message) {
     String payload = JsonUtil.toJson(body);
 
     try {
-        // 构造 HTTP POST 请求
+        // 用 JDK 原生 HttpClient 构造 POST 请求
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Content-Type", "application/json")
+                .uri(URI.create(url))                                 
+                .header("Content-Type", "application/json")           
                 .header("X-A2A-Session", session.getSessionId())
                 .header("X-A2A-Message", message.getMessageId())
-                .POST(HttpRequest.BodyPublishers.ofString(payload))
-                .timeout(Duration.ofSeconds(deliverTimeoutSeconds));
-        
+                .POST(HttpRequest.BodyPublishers.ofString(payload))   // POST，body 就是上面那个 payload
+                .timeout(Duration.ofSeconds(deliverTimeoutSeconds));  // 超时（默认 60s）
+
+        // 算 HMAC 签名，把签名头（调用方、时间戳、签名值）加进请求。
+        // scope 传 sessionId 而不是 URL 路径——路径可能被反向代理改写，用会话 ID 做 scope 更稳
         signature.headersFor(session.getSessionId(), payload).forEach(builder::header);
 
+        // 同步发请求，等响应，body 按字符串读
         HttpResponse<String> response = httpClient.send(builder.build(),
                 HttpResponse.BodyHandlers.ofString());
 
+        // 状态码不是 2xx（200~299 都算成功）
         if (response.statusCode() / 100 != 2) {
+            // 抛 502。错误信息里特意写"消息已落盘但未送达"——
+            // 告诉调用方：记录没丢，只是通知没送到，可以重试
             throw FlowAgentException.of("DELIVER_FAILED",
                     "唤醒 " + member.getAgentId() + " 返回 HTTP " + response.statusCode()
                             + "，消息已落盘但未送达", 502);
         }
     } catch (IOException e) {
+        // 网络层异常：连接失败、读超时、对端挂了等
         throw FlowAgentException.of("DELIVER_FAILED",
                 "唤醒 " + member.getAgentId() + " 失败（" + url + "）: " + e.getMessage(), 502);
     } catch (InterruptedException e) {
+        // 当前线程被中断（服务在关闭、或上层取消了请求）
+        // 恢复中断位：Java 并发规矩——catch 到 InterruptedException 后如果不继续处理，
+        // 必须把中断位重新设上，否则上层调用栈感知不到中断，取消逻辑就失效了
         Thread.currentThread().interrupt();
         throw FlowAgentException.of("DELIVER_FAILED",
                 "唤醒 " + member.getAgentId() + " 被中断", 502);
@@ -452,6 +462,12 @@ public A2aSession close(String sessionId) {
 
 会话不存在
 
+acceptsDelegation=false
+
+endpoint 为空
+
+成员数超 8
+
 往已关闭会话 post
 
 发给自己
@@ -459,6 +475,10 @@ public A2aSession close(String sessionId) {
 发送方/接收方不是成员
 
 消息超200条
+
+append 落盘失败
+
+save 刷新元数据失败
 
 **fail-open**
 
@@ -470,3 +490,10 @@ refreshReply失败（槽里 seq 没补全）
 
 收件箱指针解析不出消息（会话过期了）
 
+**通知失败但是记录已落盘**
+
+远端唤醒非 2xx / 网络 IO 失败 → 抛 502，消息不丢
+
+**协作式中断**
+
+唤醒被中断 → 还原中断位再抛 502
