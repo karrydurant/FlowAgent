@@ -12,6 +12,83 @@
 
 4.最终将执行结果通过 HTTP 接口回写到原会话中，形成完整的 “请求 - 应答” 闭环。
 
+# 流程图
+
+```mermaid
+flowchart TD
+    Start([dispatch sessionId messageId]) --> A[markHandled 抢锁]
+
+    A --> B{抢到锁?}
+    B -- 否 已在跑/已成功 --> B1[log 一条 return]
+    B -- 是 --> C[丢进线程池 pool.execute]
+
+    C --> D{线程池满?}
+    D -- 是 --> D1[releaseHandled 释放锁]
+    D1 --> D2[抛 503 DELIVER_FAILED]
+    D -- 否 --> E[后台线程开始执行]
+
+    E --> F[handle sessionId messageId]
+
+    F --> G[findMessage 从消息日志读]
+    G --> H{消息找到了?}
+    H -- 否 会话过期 --> H1[settled = true]
+    H -- 是 --> I{kind ∈ REQUEST/SOLICIT?}
+    I -- 否 不是干活的消息 --> I1[settled = true]
+    I -- 是 --> J{toAgentId 为空?}
+    J -- 是 广播没指定执行者 --> J1[settled = true]
+    J -- 否 --> K[runAgent 跑目标Agent]
+
+    K --> K1[POST 本机 /agents/target/run<br/>query=task, timeout=5s余量]
+    K1 --> K2{执行成功?}
+    K2 -- 是 --> K3[result.success=true<br/>answer/totalSteps]
+    K2 -- 异常 --> K4[result.success=false<br/>error=原因]
+
+    K3 --> L[replyTo 回投结果]
+    K4 --> L
+
+    L --> L1{回复kind?<br/>SOLICIT→PROPOSE, REQUEST→REPLY}
+    L1 --> L2[POST 本机 /a2a/sessions/id/messages<br/>from=target, to=发起方, replyTo=原messageId]
+
+    L2 --> L3{回投结果?}
+    L3 -- 成功 --> L4[settled = true]
+    L3 -- SESSION_CLOSED --> L5[settled = true<br/>发起方已关会话]
+    L3 -- 其他错误 --> L6[settled = false<br/>允许重投]
+
+    H1 --> M[markSettled]
+    I1 --> M
+    J1 --> M
+    L4 --> M
+    L5 --> M
+    L6 --> M
+
+    M --> N{settled?}
+    N -- 是 --> N1[markSettled SUCCEEDED]
+    N -- 否 --> N2[retryableFailures++<br/>markSettled FAILED]
+```
+
+markHandled 抢锁的三步
+
+```mermaid
+flowchart TD
+    S([markHandled messageId]) --> S1{messageId 为空?}
+    S1 -- 是 --> S1a[return true 放行]
+    S1 -- 否 --> S2[guard.trySet RUNNING 600s]
+
+    S2 --> S3{第一步成功?}
+    S3 -- 是 --> S3a[return true 我抢到了]
+    S3 -- 否 --> S4[guard.compareAndSet FAILED→RUNNING]
+
+    S4 --> S5{第二步成功?}
+    S5 -- 是 --> S5a[return true 上次没送出去,我重跑]
+    S5 -- 否 --> S6[guard.trySet RUNNING 600s]
+
+    S6 --> S7{第三步成功?}
+    S7 -- 是 --> S7a[return true 键刚过期]
+    S7 -- 否 --> S7b[return false 真在跑或已成功]
+
+    S2 -.异常.-> E[catch Redis挂了<br/>dedupeFailures++<br/>return true fail-open]
+```
+
 # 三个核心设计目标
 
 1.防循环：Agent 消息循环 + 组件依赖循环
@@ -262,7 +339,3 @@ this.pool = new ThreadPoolExecutor(
 dedupeFailures：幂等闸失效（Redis 异常）放行的累计次数，持续增长说明 Redis 链路有问题
 
 retryableFailures：执行完成但回复投递失败、标记为 FAILED 的累计次数，持续增长说明回写链路有问题
-
-
-
-
