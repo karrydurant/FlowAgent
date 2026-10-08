@@ -1,113 +1,125 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 820">
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="820" viewBox="0 0 1100 820">
   <defs>
-    <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="#1f4e8c"/>
+    <marker id="arrowBlue" markerWidth="7" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L10,3.5 L0,7 z" fill="#1f4e8c"/>
     </marker>
-    <marker id="mo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="#c2620c"/>
+    <marker id="arrowOrange" markerWidth="6" markerHeight="6" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L10,3 L0,6 z" fill="#c2620c"/>
     </marker>
-    <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="#999"/>
+    <marker id="arrowGray" markerWidth="5" markerHeight="5" refX="9" refY="2.5" orient="auto">
+      <path d="M0,0 L10,2.5 L0,5 z" fill="#999"/>
     </marker>
   </defs>
+
   <!-- ===== 入口层 ===== -->
   <rect x="200" y="25" width="280" height="60" rx="8" fill="#e8f0fe" stroke="#1f4e8c" stroke-width="2"/>
   <text x="340" y="50" text-anchor="middle" font-size="14" font-weight="700" fill="#1f4e8c">A2aController.java</text>
   <text x="340" y="70" text-anchor="middle" font-size="11" fill="#444">HTTP 入口 · 路由 + 参数反序列化</text>
+
   <!-- ===== 用例层 ===== -->
   <rect x="90" y="135" width="230" height="60" rx="8" fill="#fdf1e3" stroke="#c2620c" stroke-width="1.5"/>
   <text x="205" y="160" text-anchor="middle" font-size="13" font-weight="700" fill="#8a4b00">DelegationManager.java</text>
   <text x="205" y="180" text-anchor="middle" font-size="11" fill="#8a4b00">委派用例 · 同步等 REPLY</text>
+
   <rect x="380" y="135" width="230" height="60" rx="8" fill="#fdf1e3" stroke="#c2620c" stroke-width="1.5"/>
   <text x="495" y="160" text-anchor="middle" font-size="13" font-weight="700" fill="#8a4b00">NegotiationManager.java</text>
   <text x="495" y="180" text-anchor="middle" font-size="11" fill="#8a4b00">协商用例 · 多轮意见聚合</text>
-  <!-- DelegationTask -->
+
   <rect x="90" y="210" width="230" height="42" rx="6" fill="#fff" stroke="#bbb" stroke-width="1"/>
   <text x="205" y="228" text-anchor="middle" font-size="12" font-weight="600" fill="#333">DelegationTask.java</text>
   <text x="205" y="244" text-anchor="middle" font-size="10.5" fill="#777">委派任务状态记录（被 DelegationManager 管理）</text>
+
   <!-- ===== 协调层 ===== -->
   <rect x="170" y="280" width="320" height="86" rx="10" fill="#1f4e8c" stroke="#0d2c54" stroke-width="2.5"/>
   <text x="330" y="308" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">SessionManager.java ⭐</text>
   <text x="330" y="328" text-anchor="middle" font-size="11" fill="#cfe0f5">会话协议应用服务层 · open/post/deliver/wake</text>
   <text x="330" y="344" text-anchor="middle" font-size="11" fill="#cfe0f5">编排：准入校验 → 落盘 → 去重 → 唤醒 → 分发</text>
   <text x="330" y="359" text-anchor="middle" font-size="11" fill="#cfe0f5">持有 SessionStore / PeerDispatcher / Registry</text>
+
   <!-- ===== 执行层 ===== -->
   <rect x="170" y="405" width="320" height="72" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.8"/>
   <text x="330" y="430" text-anchor="middle" font-size="14" font-weight="700" fill="#1b5e20">PeerDispatcher.java</text>
   <text x="330" y="449" text-anchor="middle" font-size="11" fill="#2e7d32">收到 wake → 读消息 → 判 kind → 跑 Agent → 回投</text>
   <text x="330" y="465" text-anchor="middle" font-size="11" fill="#2e7d32">执行认领锁 RUNNING/SUCCEEDED 防重放</text>
+
   <!-- ===== 存储层 ===== -->
   <rect x="170" y="515" width="320" height="72" rx="8" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.8"/>
   <text x="330" y="540" text-anchor="middle" font-size="14" font-weight="700" fill="#4a148c">SessionStore.java</text>
   <text x="330" y="559" text-anchor="middle" font-size="11" fill="#6a1b9a">Redis 原语 · append / claimReply / pushInbox</text>
   <text x="330" y="575" text-anchor="middle" font-size="11" fill="#6a1b9a">唯一碰 Redisson 的类 · 把对象序列化成 JSON</text>
+
   <!-- ===== 右侧：数据模型 + 算法 分组框 ===== -->
   <rect x="600" y="280" width="470" height="307" rx="10" fill="#fafafa" stroke="#bbb" stroke-width="1.2" stroke-dasharray="6,4"/>
   <text x="835" y="303" text-anchor="middle" font-size="12" font-weight="700" fill="#666">数据模型 / 值对象（被多个文件共用，不画每对连线）</text>
+
   <rect x="620" y="318" width="210" height="58" rx="6" fill="#fff" stroke="#aaa" stroke-width="1"/>
   <text x="725" y="341" text-anchor="middle" font-size="12.5" font-weight="600" fill="#333">A2aMessage.java</text>
   <text x="725" y="359" text-anchor="middle" font-size="10.5" fill="#777">一条消息 + 6 种 kind 枚举</text>
   <text x="725" y="372" text-anchor="middle" font-size="10.5" fill="#777">三方都读写：构造 / 序列化 / 解析</text>
+
   <rect x="850" y="318" width="210" height="58" rx="6" fill="#fff" stroke="#aaa" stroke-width="1"/>
   <text x="955" y="341" text-anchor="middle" font-size="12.5" font-weight="600" fill="#333">A2aSession.java</text>
   <text x="955" y="359" text-anchor="middle" font-size="10.5" fill="#777">会话元数据 · 成员表 · OPEN/CLOSED</text>
   <text x="955" y="372" text-anchor="middle" font-size="10.5" fill="#777">open() 写入，post() 更新计数</text>
+
   <rect x="620" y="393" width="210" height="52" rx="6" fill="#fff" stroke="#aaa" stroke-width="1"/>
   <text x="725" y="415" text-anchor="middle" font-size="12.5" font-weight="600" fill="#333">Member.java</text>
   <text x="725" y="433" text-anchor="middle" font-size="10.5" fill="#777">agentId + endpoint + role</text>
+
   <rect x="850" y="393" width="210" height="52" rx="6" fill="#e8eaf6" stroke="#3949ab" stroke-width="1.2"/>
   <text x="955" y="415" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1a237e">NegotiationAggregator.java</text>
   <text x="955" y="433" text-anchor="middle" font-size="10.5" fill="#3949ab">纯算法 · 聚合意见 → Synthesis</text>
+
   <text x="835" y="480" text-anchor="middle" font-size="11" fill="#999">SessionManager 构造这些对象</text>
   <text x="835" y="498" text-anchor="middle" font-size="11" fill="#999">SessionStore 把它们序列化成 JSON 存 Redis</text>
   <text x="835" y="516" text-anchor="middle" font-size="11" fill="#999">PeerDispatcher 读 A2aMessage 的 kind 决定执行与否</text>
+
   <!-- ===== 外部依赖 ===== -->
   <rect x="80" y="630" width="940" height="150" rx="10" fill="#f5f5f5" stroke="#ccc" stroke-width="1.2" stroke-dasharray="6,4"/>
   <text x="550" y="655" text-anchor="middle" font-size="13" font-weight="700" fill="#666">外部依赖（不在 a2a-gateway 模块内）</text>
+
   <rect x="110" y="670" width="170" height="60" rx="6" fill="#fff" stroke="#ccc" stroke-width="1"/>
   <text x="195" y="694" text-anchor="middle" font-size="12" font-weight="600" fill="#444">common 模块</text>
   <text x="195" y="712" text-anchor="middle" font-size="10.5" fill="#888">Exception / Result</text>
   <text x="195" y="725" text-anchor="middle" font-size="10.5" fill="#888">Signature / JsonUtil</text>
+
   <rect x="300" y="670" width="180" height="60" rx="6" fill="#fff" stroke="#ccc" stroke-width="1"/>
   <text x="390" y="694" text-anchor="middle" font-size="12" font-weight="600" fill="#444">AgentRegistryService</text>
   <text x="390" y="712" text-anchor="middle" font-size="10.5" fill="#888">registry 模块 · 查 Card</text>
   <text x="390" y="725" text-anchor="middle" font-size="10.5" fill="#888">← SessionManager.resolveMember 调</text>
+
   <rect x="500" y="670" width="170" height="60" rx="6" fill="#fff8e1" stroke="#c2620c" stroke-width="1.2"/>
   <text x="585" y="694" text-anchor="middle" font-size="12" font-weight="600" fill="#8a4b00">Redis (Redisson)</text>
   <text x="585" y="712" text-anchor="middle" font-size="10.5" fill="#8a4b00">唯一真相源</text>
   <text x="585" y="725" text-anchor="middle" font-size="10.5" fill="#8a4b00">← 只被 SessionStore 碰</text>
+
   <rect x="690" y="670" width="170" height="60" rx="6" fill="#fff" stroke="#ccc" stroke-width="1"/>
   <text x="775" y="694" text-anchor="middle" font-size="12" font-weight="600" fill="#444">ReActAgent</text>
   <text x="775" y="712" text-anchor="middle" font-size="10.5" fill="#888">workflow-engine 模块</text>
   <text x="775" y="725" text-anchor="middle" font-size="10.5" fill="#888">← PeerDispatcher 调它跑 LLM</text>
+
   <rect x="880" y="670" width="120" height="60" rx="6" fill="#fff" stroke="#ccc" stroke-width="1"/>
   <text x="940" y="694" text-anchor="middle" font-size="12" font-weight="600" fill="#444">HttpClient</text>
   <text x="940" y="712" text-anchor="middle" font-size="10.5" fill="#888">跨实例唤醒</text>
   <text x="940" y="725" text-anchor="middle" font-size="10.5" fill="#888">← wake + 回投</text>
-  <!-- ===== 连线：只画主链，全部正交/短直 ===== -->
-  <!-- Controller → 两个用例层 -->
-  <line x1="290" y1="85" x2="215" y2="135" stroke="#c2620c" stroke-width="1.5" marker-end="url(#mo)"/>
-  <line x1="390" y1="85" x2="490" y2="135" stroke="#c2620c" stroke-width="1.5" marker-end="url(#mo)"/>
-  <!-- Controller → SessionManager 主链 -->
-  <line x1="330" y1="85" x2="330" y2="280" stroke="#1f4e8c" stroke-width="2.8" marker-end="url(#ma)"/>
-  <!-- Controller → PeerDispatcher wake：走右侧短虚线，不交叉 -->
-  <path d="M 480 55 L 540 55 L 540 440 L 490 440" fill="none" stroke="#aaa" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#mg)"/>
-  <!-- DelegationManager → DelegationTask -->
-  <line x1="205" y1="195" x2="205" y2="210" stroke="#bbb" stroke-width="1" marker-end="url(#mg)"/>
-  <!-- 用例层 → SessionManager -->
-  <line x1="205" y1="252" x2="270" y2="280" stroke="#c2620c" stroke-width="1.5" marker-end="url(#mo)"/>
-  <line x1="495" y1="195" x2="400" y2="280" stroke="#c2620c" stroke-width="1.5" marker-end="url(#mo)"/>
-  <!-- NegotiationManager → Aggregator：走框内水平，不跨图 -->
-  <path d="M 610 165 L 640 165 L 640 419 L 850 419" fill="none" stroke="#3949ab" stroke-width="1.3" marker-end="url(#mg)"/>
-  <!-- SessionManager → SessionStore 主链 -->
-  <line x1="330" y1="366" x2="330" y2="515" stroke="#1f4e8c" stroke-width="2.8" marker-end="url(#ma)"/>
-  <!-- SessionManager → PeerDispatcher -->
-  <line x1="270" y1="366" x2="270" y2="405" stroke="#2e7d32" stroke-width="1.8" marker-end="url(#mg)"/>
-  <!-- PeerDispatcher → SessionStore -->
-  <line x1="270" y1="477" x2="270" y2="515" stroke="#6a1b9a" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#mg)"/>
-  <!-- SessionStore → Redis：短垂直 -->
-  <line x1="330" y1="587" x2="585" y2="670" stroke="#c2620c" stroke-width="1.5" marker-end="url(#mo)"/>
+
+  <!-- 连线 -->
+  <line x1="290" y1="85" x2="215" y2="135" stroke="#c2620c" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+  <line x1="390" y1="85" x2="490" y2="135" stroke="#c2620c" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+  <line x1="330" y1="85" x2="330" y2="280" stroke="#1f4e8c" stroke-width="2.8" marker-end="url(#arrowBlue)"/>
+
+  <path d="M 480 55 L 540 55 L 540 440 L 490 440" fill="none" stroke="#aaa" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#arrowGray)"/>
+  <line x1="205" y1="195" x2="205" y2="210" stroke="#bbb" stroke-width="1" marker-end="url(#arrowGray)"/>
+  <line x1="205" y1="252" x2="270" y2="280" stroke="#c2620c" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+  <line x1="495" y1="195" x2="400" y2="280" stroke="#c2620c" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+  <path d="M 610 165 L 640 165 L 640 419 L 850 419" fill="none" stroke="#3949ab" stroke-width="1.3" marker-end="url(#arrowGray)"/>
+
+  <line x1="330" y1="366" x2="330" y2="515" stroke="#1f4e8c" stroke-width="2.8" marker-end="url(#arrowBlue)"/>
+  <line x1="270" y1="366" x2="270" y2="405" stroke="#2e7d32" stroke-width="1.8" marker-end="url(#arrowGray)"/>
+  <line x1="270" y1="477" x2="270" y2="515" stroke="#6a1b9a" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#arrowGray)"/>
+  <line x1="330" y1="587" x2="585" y2="670" stroke="#c2620c" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+
   <!-- 图例 -->
   <line x1="120" y1="805" x2="150" y2="805" stroke="#1f4e8c" stroke-width="2.8"/>
   <text x="156" y="809" font-size="11" fill="#333">主调用链</text>
