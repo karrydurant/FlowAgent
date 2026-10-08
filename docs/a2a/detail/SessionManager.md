@@ -174,9 +174,83 @@ public A2aMessage post(String sessionId, A2aMessage message) {
 
 ## 读消息分为几种
 
-人复盘要读完整记录，模型喂上下文只要未读 —— 这俩能合并成一个接口吗？
+读消息分为 message, inbox
 
-不能。`messages()` 幂等、全量；`inbox()` 取走即消费、限量 20 条。
+message() 服务人（和等回复的调用方）
+
+它的实际调用方：
+
+`DelegationManager.awaitReply()`：委派方在循环里调它，找 `replyTo == 自己那条 messageId` 的 REPLY
+
+`A2aController.readMessages`：人打开网页看 "这个会话从头到尾聊了什么"
+
+这两个场景的共同点是：看多少次都一样，不能看一次就少一条。如果 messages 是取走即消费的，委派方轮询两次，第二次就空了 —— 它怎么知道 "还没收到回复" 还是 "已经收到但被我看没了"？
+
+所以它是幂等的：`seq > afterSeq` 的消息，每次读都一样。
+
+inbox() 服务模型（ReAct 每轮推理）
+
+`ReActAgent` 在每轮 Thought 之前，调一次 `GET /a2a/agents/{agentId}/inbox`，把里面的消息当成 "别人新告诉我的事" 塞进提示词。
+
+这个场景的需求就完全反过来了：说过一次就够了
+
+想象一下如果用 `messages()` 给模型喂上下文：
+
+第 1 轮：模型看到 5 条新消息，处理了
+
+第 2 轮：模型又看到这 5 条（因为 messages 是全量的），它以为是新的，又处理一遍
+
+第 3 轮：还是这 5 条……
+
+而且 ReActAgent 的历史窗口有限（默认只留最近 4 步），这些重复消息会把窗口占满，真正重要的早期约束（比如 "别动生产库"）被挤掉
+
+inbox() 取走即消费，正好解决这个问题：每条新消息模型只看一次，看完就从队列里消失，下次看到的都是 "真・新到的"。
+
+**为什么不能合并成一个接口**
+
+
+
+```java
+public List<A2aMessage> messages(String sessionId, long afterSeq) {
+    requireSession(sessionId);
+    return store.readAfter(sessionId, afterSeq);
+}
+```
+
+```java
+public List<A2aMessage> inbox(String agentId, int limit) {
+    if (agentId == null || agentId.isBlank()) {
+        throw FlowAgentException.invalidParam("agentId 不能为空");
+    }
+    return store.drainInbox(agentId, Math.min(Math.max(limit, 1), MAX_INBOX_BATCH));
+}
+```
+
+```java
+public Optional<A2aSession> get(String sessionId) {
+    return store.find(sessionId);
+}
+
+public List<A2aSession> sessionsByRun(String runId, int limit) {
+    return store.findByRun(runId, limit);
+}
+
+public List<A2aSession> recentSessions(int limit) {
+    return store.findRecent(limit);
+}
+
+public A2aSession close(String sessionId) {
+    A2aSession session = requireSession(sessionId);
+    if (session.getStatus() == A2aSession.SessionStatus.OPEN) {
+        session.setStatus(A2aSession.SessionStatus.CLOSED);
+        session.setUpdatedAt(Instant.now());
+        store.save(session);
+        log.info("[A2A] session closed | id={} | messages={}",
+                sessionId, session.getMessageCount());
+    }
+    return session;
+}
+```
 
 ## 故障语义
 
