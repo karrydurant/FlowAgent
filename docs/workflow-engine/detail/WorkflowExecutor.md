@@ -246,6 +246,19 @@ public void executeSingleNode(WorkflowDefinition def, WorkflowRun run, String no
                         attempt, node.getMaxRetries(), run.getRunId(), nodeId);
                 Thread.sleep(node.getRetryDelaySeconds() * 1000L);
             }
+
+            // 获取节点执行器
+            NodeExecutor executor=nodeExecutorFactory.get(node.getNodeType());
+            Map<String, Object> nodeOutput;
+            try {
+                nodeOutput=future.get(nodeTimeout, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                future.cancel(true);
+                throw new FlowAgentException("NODE_TIMEOUT",
+                        "节点 " + node.getName() + " 执行超时 (" + nodeTimeout + "s)");
+            } catch (ExecutionException e) {
+                Throwable cause
+            }
         }
     }
 }
