@@ -264,3 +264,58 @@ public void executeSingleNode(WorkflowDefinition def, WorkflowRun run, String no
 }
 ```
 
+## 断点续跑前的检查 -- prepareResume()
+
+```java
+private WorkflowRun prepareResume(WorkflowDefinition definition, WorkflowRun run) {
+    String runId=run.getRunId();
+    if (definition==null) {
+        throw FlowAgentException.businessError("INVALID_DEFINITION", "工作流定义不能为空");
+    }
+    DagValidator.validate(definition);
+
+    // 定义必须与中断时一致
+    String currentFingerprint=definition.fingerprint();
+    String snapshotFingerprint=run.getDefinitionFingerprint();
+    if (snapshotFingerprint != null && !snapshotFingerprint.equals(currentFingerprint)) {
+        throw FlowAgentException.businessError("DEFINITION_CHANGED",
+                "工作流定义已变更，无法从旧 Checkpoint 恢复（快照=" + snapshotFingerprint
+                        + ", 当前=" + currentFingerprint + "）。请重新发起一次执行。");
+    }
+    if (snapshotFingerprint == null) {
+        log.warn("[Executor] checkpoint 无定义指纹（旧版本快照），跳过一致性校验 | runId={}", runId);
+        run.setDefinitionFingerprint(currentFingerprint);
+    }
+
+    //状态必须可恢复
+    WorkflowRun.RunStatus status = run.getStatus();
+    if (status == WorkflowRun.RunStatus.COMPLETED) {
+        throw FlowAgentException.businessError("ALREADY_COMPLETED",
+                "工作流已执行完成，无需恢复: " + runId);
+    }
+    if (status == WorkflowRun.RunStatus.CANCELLED) {
+        throw FlowAgentException.businessError("RUN_CANCELLED",
+                "工作流已被取消，不允许恢复: " + runId);
+    }
+
+    // 并发校验：正在跑的不能重复恢复
+    // runningWorkflows.containsKey(runId) 查的是本进程内；而 leaseManager.isHeld(runId)查的是非本进程的
+    if (runningWorkflows.containsKey(runId) || leaseManager.isHeld(runId)) {
+        throw FlowAgentException.conflict("工作流正在运行中，不能重复恢复: " + runId
+                + "（若对端实例已崩溃，租约将在 " + leaseManager.watchdogMillis() / 1000
+                + "s 内自动释放，请稍后重试）");
+    }
+
+    //清理中断残留状态
+    List<String> interrupted=new ArrayList<>(run.getActiveNodeIds());
+    List<String> previouslyFailed=new ArrayList<>(run.getFailedNodeIds());
+}
+```
+
+为什么 runningWorkflows、leaseManager 缺一不可？(/)
+
+|  | runningWorkflows | leaseManager |
+| ---- | ---- | ---- |
+| 是什么 | 一个本地内存的 ConcurrentHashMap | Redis上的分布式锁 |
+| 存的是什么 | 我这台机器上所有正在跑的run | 它是一个租约管理器 |
+| 防的是什么 | 同一个 JVM 内多个线程并发恢复同一个 runId | 防止一个 runId 被两个机器同时跑，导致状态双写 |
