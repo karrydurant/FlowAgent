@@ -352,20 +352,100 @@ private WorkflowRun prepareResume(WorkflowDefinition definition, WorkflowRun run
 ## 节点成功提交 -- commitNodeSuccess()
 
 ```java
-private void commitNodeSuccess(WorkflowDefinition def, WorkflowRun run, String nodeId, WorkflowRun.NodeExecutionResult result, Object nodeOutput) {
-    Lock lock=run.checkpointMutex();
+private void commitNodeSuccess(WorkflowDefinition def, WorkflowRun run, String nodeId,
+                               WorkflowRun.NodeExecutionResult result, Object nodeOutput) {
+    Lock lock = run.checkpointMutex();
     lock.lock();
     try {
-        run.getVariables().put()
+        run.getVariables().put("node:" + nodeId + ":output", nodeOutput);
+        run.getActiveNodeIds().remove(nodeId);
+        run.getCompletedNodeIds().add(nodeId);
+        run.getNodeResults().put(nodeId, result);
+        run.addTimelineEvent("NODE_COMPLETE", nodeId, "执行完成 (" + result.getDurationMs() + "ms)");
+
+        saveCheckpointQuietly(def, run, nodeId);
     } finally {
         lock.unlock();
     }
 }
+
 ```
 
 ## 四种降级策略 -- handelFallback()
 
+```java
+private void handleFallback(WorkflowDefinition def, WorkflowRun run,
+                            String nodeId, WorkflowNode node, Exception error) {
+    switch (effectiveFallbackStrategy(run, nodeId, node)) {
+        case SKIP -> {
+            log.warn("[Executor] fallback SKIP | runId={} | node={}", run.getRunId(), nodeId);
+            failClosedCondition(run, node, nodeId);
+        }
+        case FALLBACK_VALUE -> {
+            log.warn("[Executor] fallback VALUE | runId={} | node={}", run.getRunId(), nodeId);
+            run.getCompletedNodeIds().add(nodeId);
+            run.getVariables().put("node:" + nodeId + ":output",
+                    Map.of("fallback", true, "error", error.getMessage()));
+            failClosedCondition(run, node, nodeId);
+        }
+        case PAUSE -> {
+            log.warn("[Executor] fallback PAUSE | runId={} | node={}", run.getRunId(), nodeId);
+            run.setStatus(WorkflowRun.RunStatus.PAUSED);
+            run.addTimelineEvent("WORKFLOW_PAUSED", nodeId, "节点失败，工作流已暂停");
+            saveCheckpointQuietly(def, run, nodeId);
+        }
+        case FAIL -> {
+            log.error("[Executor] fallback FAIL | runId={} | node={}", run.getRunId(), nodeId);
+            run.setStatus(WorkflowRun.RunStatus.FAILED);
+            run.setErrorMessage("节点 " + node.getName() + " 执行失败: " + error.getMessage());
+            run.addTimelineEvent("WORKFLOW_FAILED", nodeId, "节点失败，工作流终止");
+            saveCheckpointQuietly(def, run, nodeId);
+        }
+    }
+}
+```
+
 ## 条件分支过滤 -- filterByConditions()
+
+```java
+private List<String> filterByConditions(WorkflowDefinition def, WorkflowRun run,
+                                         List<String> candidateNodeIds) {
+    List<String> active = new ArrayList<>();
+    for (String nodeId : candidateNodeIds) {
+        // 1. 已经有结论的节点，直接跳过不处理
+        if (run.getCompletedNodeIds().contains(nodeId)
+                || run.getSkippedNodeIds().contains(nodeId)
+                || run.getBlockedNodeIds().contains(nodeId)) {
+            continue;
+        }
+
+        // 2. 判断这个节点该不该跑
+        if (shouldExecuteNode(def, run, nodeId)) {
+            active.add(nodeId);
+            continue;
+        }
+
+        // 3. 不该跑，分两种原因
+        List<String> brokenSources = brokenSources(def, run, nodeId);
+        if (!brokenSources.isEmpty()) {
+            // 原因1：上游失败了，所以缺输入
+            log.warn("[Executor] node blocked by upstream failure | runId={} | node={} | upstream={}",
+                    run.getRunId(), nodeId, brokenSources);
+            run.getBlockedNodeIds().add(nodeId);
+            run.addTimelineEvent("NODE_BLOCKED", nodeId,
+                    "上游失败/被拦，本节点缺输入未执行（上游: "
+                            + String.join(", ", brokenSources) + "）");
+        } else {
+            // 原因2：条件分支不匹配，选了另一条路
+            log.info("[Executor] node skipped by condition | runId={} | node={}",
+                    run.getRunId(), nodeId);
+            run.getSkippedNodeIds().add(nodeId);
+            run.addTimelineEvent("NODE_SKIPPED", nodeId, "条件分支不匹配，跳过执行");
+        }
+    }
+    return active;
+}
+```
 
 ## 审批唤醒 -- resumeAfterApproval()
 
