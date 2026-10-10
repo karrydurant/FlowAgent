@@ -306,11 +306,38 @@ private WorkflowRun prepareResume(WorkflowDefinition definition, WorkflowRun run
                 + "s 内自动释放，请稍后重试）");
     }
 
-    //清理中断残留状态
+    // 清理中断残留状态
     List<String> interrupted=new ArrayList<>(run.getActiveNodeIds());
     List<String> previouslyFailed=new ArrayList<>(run.getFailedNodeIds());
     LIstanbul<String> previousBlocked=new ArrayList<>(run.getBlockedNodeIds());
-    ....
+    // 正常执行时 activeNodeIds 是"正在跑的、活跃"的节点的集合
+    // 进程突然崩溃，它们并没有跑完，不清除它们恢复时以为它们还在跑就会跳过
+    run.getActiveNodeIds().clear();
+    // 恢复就是要重跑失败节点
+    run.getFailedNodeIds().clear();
+    // 清空因为上游失败而被拦住、没跑的节点（下游解冻）
+    run.getBlockedNodeIds().clear();
+    //把上次失败的错误信息、完成时间清掉
+    run.setErrorMessage(null);
+    run.setCompletedAt(null);
+    run.setResumeCount(run.getResumeCount() + 1);
+    run.addTimelineEvent("WORKFLOW_RESUME", run.getLastCheckpointNodeId(),
+        String.format("从 Checkpoint 恢复（第 %d 次）| 已完成 %d 节点 | 待重跑: %s",
+                run.getResumeCount(), run.getCompletedNodeIds().size(),
+                interrupted.isEmpty() && previouslyFailed.isEmpty()
+                        ? "无" : union(union(interrupted, previouslyFailed), previouslyBlocked)));
+
+    //占用本JVM正在跑它的槽位，防止同一个 JVM 内两个线程同时恢复同一个 runId。
+    WorkflowRun holder=runningWorkflows.putIfAbsent(runId, run);
+    if (holder != null) {
+        throw FlowAgentException.conflict("工作流正在运行中，不能恢复："+ runId);
+    }
+    // 现在要恢复它 —— 如果不删，查状态的时候会先从 finishedWorkflows 里拿到旧的终态，看不到新的执行进度。
+    finishedWorkflows.remove(runId);
+    log.info("[Executor] resuming | runId={} | resumeCount={} | completed={} | skipped={} | interrupted={} | failed={} | unblocked={}",
+        runId, run.getResumeCount(), run.getCompletedNodeIds().size(), run.getSkippedNodeIds().size(), interrupted, previouslyFailed, previouslyBlocked);
+    //把清理好的 run 对象返回，交给 executeInternal 真正开始跑
+    return run;
 }
 ```
 
