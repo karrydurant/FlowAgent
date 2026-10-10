@@ -126,3 +126,7 @@ Spring AI 1.0 在顶层调用时 `previousChatResponse` 是 null，它的累积�
 | blankTextFrames | 有 choices 但 content 是空串 | 推理模型把内容写进了 reasoning_content，思考把预算吃光了 | 该调大 max_tokens |
 
 `blankTextFrames` 多 → 模型把整轮输出写进了思考通道，Spring AI 1.0 的 POJO 没认识 `reasoning_content` 这个字段，思考把 `max-tokens` 预算吃光了，正式回答一个字没剩 → 该抬 max-tokens
+
+## 重试
+
+
