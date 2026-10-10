@@ -349,7 +349,7 @@ private WorkflowRun prepareResume(WorkflowDefinition definition, WorkflowRun run
 | 存的是什么 | 我这台机器上所有正在跑的run | 它是一个租约管理器 |
 | 防的是什么 | 同一个 JVM 内多个线程并发恢复同一个 runId | 防止一个 runId 被两个机器同时跑，导致状态双写 |
 
-## commitNodeSuccess()
+## 节点成功提交 -- commitNodeSuccess()
 
 ```java
 private void commitNodeSuccess(WorkflowDefinition def, WorkflowRun run, String nodeId, WorkflowRun.NodeExecutionResult result, Object nodeOutput) {
@@ -360,5 +360,33 @@ private void commitNodeSuccess(WorkflowDefinition def, WorkflowRun run, String n
     } finally {
         lock.unlock();
     }
+}
+```
+
+## 四种降级策略 -- handelFallback()
+
+## 条件分支过滤 -- filterByConditions()
+
+## 审批唤醒 -- resumeAfterApproval()
+
+```java
+public WorkflowRun resumeAfterApproval(WorkflowDefinition definition, String runId, String nodeId, String verdict, String comment) {
+    //加载快照
+    WorkflowRun snapshot=checkpointManager.load(runId).orElse(null);
+    if (snapshot==null) {
+        log.warn("[Executor] approval wakeup dropped: no checkpoint | runId={} | node={} | verdict={}",
+                runId, nodeId, verdict);
+        return null;
+    }
+
+    //幂等门
+    //检查 "快照确实停在`等审批`这个状态"，"这次的审批结果，说的就是我们正在等的那个节点"
+    if (!snapshot.isWaitingForApproval() || !nodeId.equals(snapshot.getSuspendedApprovalNodeIds())) {
+        log.info("[Executor] approval wakeup ignored: not the suspended node | runId={} | node={} "
+                        + "| verdict={} | status={} | suspendedAt={}",
+                runId, nodeId, verdict, snapshot.getStatus(), snapshot.getSuspendedApprovalNodeId());
+        return snapshot;
+    }
+    return doResumeAfterApproval(definition, snapshot, nodeId, verdict, comment);
 }
 ```
