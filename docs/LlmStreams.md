@@ -81,3 +81,48 @@ Mono<ChatResponse> attempt=Mono.defer(() -> {
 
 Mono.defer 在这里的作用是：里面的 lambda 不是现在执行，而是每次有人订阅时才执行。
 重试=重新订阅=重新执行lambda=重新造一条流
+
+## aggregate
+
+把流式返回的 N 个碎片帧，拼成一个跟非流式调用形状完全一样的 `ChatResponse`
+
+1.拼正文：遍历所有帧，把每帧带的半句话 append 起来，得到完整回答
+
+2.聚 usage：从最后一个真正带 token 计数的帧取出 prompt/completion tokens，用于成本统计
+
+3.判失败：如果一帧正文都没有，抛 `LLM_STREAM_EMPTY`（外层会接住这个错做空正文重试）
+
+三类累加器
+
+```java
+StringBuilder text = new StringBuilder();   // 拼正文
+String model = null;                         // 模型名，取最后一个非空
+String lastFinishReason = null;              // 结束原因，取最后一个非空
+Integer promptTokens = null;                 // 总 prompt token
+Integer completionTokens = null;             // 总 completion token
+int textFrames = 0;                          // 有正文的帧数
+int noChoiceFrames = 0;                      // 没有 choices 的帧
+int blankTextFrames = 0;                    // 有 choices 但正文空的帧
+```
+
+1.末帧是空壳，getResult() 返回 null 不是异常
+
+OpenAI 兼容协议的最后一帧经常长这样：
+
+`{"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 800}}`
+
+它没有任何正文，只有 token 计数。这时 `frame.getResult()` 返回的是 **null**（不是抛异常），因为 `choices` 是空数组，Spring AI 找不到一个 `Generation`。
+
+2.每帧的 usage 是该帧自己的，不是累积值
+
+Spring AI 1.0 在顶层调用时 `previousChatResponse` 是 null，它的累积逻辑直接返回当前帧的值 —— 也就是说每帧的 usage 只是这一小段 chunk 自己的 token 数。
+
+3.空帧要分为两类，因为原因和处置不同
+
+| 计数器 | 含义 | 占多数时说明什么 | 处置 |
+| ---- | ---- | ---- | ---- |
+| textFrames | 有正文的帧 | 正常 | 拼起来 |
+| noChoiceFrames | 帧里没有 choices（心跳、空壳末帧） | 端点没按流式下发正文 | 调 max-tokens 没用 |
+| blankTextFrames | 有 choices 但 content 是空串 | 推理模型把内容写进了 reasoning_content，思考把预算吃光了 | 该调大 max_tokens |
+
+`blankTextFrames` 多 → 模型把整轮输出写进了思考通道，Spring AI 1.0 的 POJO 没认识 `reasoning_content` 这个字段，思考把 `max-tokens` 预算吃光了，正式回答一个字没剩 → 该抬 max-tokens
