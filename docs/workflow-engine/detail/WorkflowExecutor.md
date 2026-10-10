@@ -309,6 +309,8 @@ private WorkflowRun prepareResume(WorkflowDefinition definition, WorkflowRun run
     //清理中断残留状态
     List<String> interrupted=new ArrayList<>(run.getActiveNodeIds());
     List<String> previouslyFailed=new ArrayList<>(run.getFailedNodeIds());
+    LIstanbul<String> previousBlocked=new ArrayList<>(run.getBlockedNodeIds());
+    ....
 }
 ```
 
@@ -319,3 +321,17 @@ private WorkflowRun prepareResume(WorkflowDefinition definition, WorkflowRun run
 | 是什么 | 一个本地内存的 ConcurrentHashMap | Redis上的分布式锁 |
 | 存的是什么 | 我这台机器上所有正在跑的run | 它是一个租约管理器 |
 | 防的是什么 | 同一个 JVM 内多个线程并发恢复同一个 runId | 防止一个 runId 被两个机器同时跑，导致状态双写 |
+
+## commitNodeSuccess()
+
+```java
+private void commitNodeSuccess(WorkflowDefinition def, WorkflowRun run, String nodeId, WorkflowRun.NodeExecutionResult result, Object nodeOutput) {
+    Lock lock=run.checkpointMutex();
+    lock.lock();
+    try {
+        run.getVariables().put()
+    } finally {
+        lock.unlock();
+    }
+}
+```
