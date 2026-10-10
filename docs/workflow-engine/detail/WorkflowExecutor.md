@@ -341,7 +341,7 @@ private WorkflowRun prepareResume(WorkflowDefinition definition, WorkflowRun run
 }
 ```
 
-为什么 runningWorkflows、leaseManager 缺一不可？(/)
+[为什么 runningWorkflows、leaseManager 缺一不可？](double-run-guard.md)
 
 |  | runningWorkflows | leaseManager |
 | ---- | ---- | ---- |
