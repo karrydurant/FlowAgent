@@ -2,7 +2,7 @@
 
 ## runningWorkflows
 
-`private final ConcurrentHashMap<String, WorkflowRun> runningWorkflows=new ConcurrentHashMap<>();
+`private final ConcurrentHashMap<String, WorkflowRun> runningWorkflows=new ConcurrentHashMap<>();`
 
 **所有用到它的地方**
 
@@ -59,7 +59,9 @@ public class WorkflowRunLeaseManager {
     }
     public Optional<WorkflowRunLease> tryAcquire(String runId) {
         if (!enabled) {
-            
+            //表明不需要分布式锁
+            return Optional.of(WorkflowRunLease.noop(runId));
+            //之所以不是 Optional.empty() 是因为那样会让调用方以为 "抢锁失败了"，把工作流标成 FAILED
         }
         RLock lock=redissonClient.getLock(keyOf(runId));
         boolean acquired=lock.tryLock(0, TimeUnit.SECONDS);
@@ -70,7 +72,7 @@ public class WorkflowRunLeaseManager {
         try {
             lease.close();
         } catch (Exception e) {
-            l
+            log.error("[Lease] 释放失败，看门狗会继续续期 | runId={}", runId, e);
         }
     }
     public long watchingMillis() {
@@ -79,6 +81,5 @@ public class WorkflowRunLeaseManager {
     public boolean forceRelease(String runId) {
         return redissonClient.getLock(keyOf(runId)).forceUnlock();
     }
-
 }
 ```
