@@ -1,6 +1,6 @@
 # LlmStreams
 
-## Flux</ChatResponse>/：
+## `Flux<ChatResponse>`：
 
 OpenAI 兼容的流式响应（SSE）-- 上游不等整段回答生成完，每吐几个 token 就发一个 HTTP chunk。
 Spring AI 把每个 chunk 包成一个 ChatResponse，
