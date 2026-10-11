@@ -1,89 +1,45 @@
 # LlmStreams
 
-```java
-package com.flowagent.common.llm;
+```mermaid
+flowchart TD
+    Start(["await(Supplier, calls, callSite)"]) --> Defer
 
-import com.flowagent.common.exception.FlowAgentException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.metadata.DefaultUsage;
-import org.springframework.ai.chat.metadata.EmptyUsage;
-import org.springframework.ai.chat.metadata.Usage;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.util.retry.Retry;
+    Defer["Mono.defer 每次订阅都执行"] --> Permit["awaitRatePermit 取令牌"]
 
-import java.time.Duration;
-import java.util.List;
-import java.util.Locale;
-import java.util.Objects;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Supplier;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+    Permit -->|"被中断 InterruptedException"| ThrowInterrupt["抛 LLM_RATE_GATE_INTERRUPTED<br/>恢复中断位，不重试"]
+    Permit -->|"等到令牌"| Guard["guard 挂两帧空闲超时"]
 
-public final class LlmStreams {
-    //空闲超时的错误码
-    public static final String TIMEOUT_ERROR_CODE = "LLM_STREAM_TIMEOUT";
-    //一帧正文都没有的错误码
-    public static final String EMPTY_STREAM_ERROR_CODE = "LLM_STREAM_EMPTY";
-    //上游限流（429）重试到耗尽仍然失败的错误码
-    public static final String RETRY_EXHAUSTED_ERROR_CODE = "LLM_UPSTREAM_RETRY_EXHAUSTED";
+    Guard -->|"两帧间隔超 idleTimeout"| ThrowTimeout["抛 LLM_STREAM_TIMEOUT<br/>不重试，穿透"]
+    Guard -->|"正常收帧"| Collect["collectList 攒成 List&lt;ChatResponse&gt;"]
 
-    //账号/额度问题--重试不会有帮助，直接失败
-    public static final String UPSTREAM_PERMANENT_ERROR_CODE = "LLM_UPSTREAM_PERMANENT";
-    //等发起配额时线程被打断
-    public static final String RATE_GATE_INTERRUPTED_ERROR_CODE = "LLM_RATE_GATE_INTERRUPTED";
+    Collect --> Aggregate["aggregate 拼帧"]
 
-    //进程级的发起速率闸门
-    private static volatile LlmRateGate rateGate;
+    Aggregate -->|"textFrames == 0"| ThrowEmpty["抛 LLM_STREAM_EMPTY"]
+    Aggregate -->|"成功"| Result["返回 ChatResponse<br/>block() 结束"]
 
-    private static final Logger log=LoggerFactory.getLogger(LlmStreams.class);
+    ThrowEmpty --> EmptyFilter{"isEmptyBody?<br/>错误码 == LLM_STREAM_EMPTY"}
+    EmptyFilter -->|"true 且 emptyRetries &gt; 0"| BackoffEmpty["退避 10s + 0.5 抖动"]
+    BackoffEmpty --> Defer
+    EmptyFilter -->|"false"| EndFail["原样往上抛"]
+    EmptyFilter -->|"次数用完"| ThrowEmptyExhausted["抛 LLM_STREAM_EMPTY<br/>消息加'重试过 N 次'"]
 
-    //429 正文里出现这些词就意味着不是限流，而是账号本身的问题，重试是纯浪费。
-    private static final List<String> PERMANENT_MARKERS = List.of(
-            "insufficient balance",
-            "arrears",
-            "suspended",
-            "not activated");
+    ThrowTimeout --> RetryFilter{"retryable?<br/>状态码 == 429 且非账号"}
+    ThrowInterrupt --> RetryFilter
 
-    private static final List<String> THROTTLE_WINDOW_MARKERS = List.of(
-            "allocated quota exceeded",
-            "exceeded your current quota",
-            "insufficient quota");
+    RetryFilter -->|"429 且非账号 且 maxRetries &gt; 0"| Backoff429["退避 10s + 0.5 抖动"]
+    Backoff429 --> Defer
+    RetryFilter -->|"429 且账号问题"| ThrowPermanent["抛 LLM_UPSTREAM_PERMANENT<br/>不重试直接判死"]
+    RetryFilter -->|"其他错（5xx/连接异常）"| EndFail["原样往上抛"]
+    RetryFilter -->|"429 但次数用完"| Throw429Exhausted["抛 LLM_UPSTREAM_RETRY_EXHAUSTED<br/>带限流类别+上游正文"]
 
-    private static final List<String> OBSERVED_RATE_MARKERS = List.of(
-            "we have to rate limit you");
-
-    private static final Pattern MESSAGE_IN_BODY =
-            Pattern.compile("\"message\"\\s*:\\s*\"([^\"]*)\"");
-
-    private static final int UPSTREAM_EXCERPT_LIMIT = 160;
-
-    private LlmStreams() {
-    }
-
-    static void installRateGate(LlmRateGate gate) {
-        rateGate = gate;
-    }
-
-    static void uninstallRateGate(LlmRateGate gate) {
-        if (rateGate == gate) {
-            rateGate = null;
-        }
-    }
-
-    public static ChatResponse await(Supplier<Flux<ChatResponse>> stream, LlmCallProperties calls, String callSite) {
-        Object.requireNonNull(calls,
-                )
-    }
-}
+    style Result fill:#c8e6c9
+    style ThrowInterrupt fill:#ffcdd2
+    style ThrowTimeout fill:#ffcdd2
+    style ThrowPermanent fill:#ffcdd2
+    style Throw429Exhausted fill:#ffcdd2
+    style ThrowEmptyExhausted fill:#ffcdd2
+    style Backoff429 fill:#fff9c4
+    style BackoffEmpty fill:#fff9c4
 ```
 
 ## `Flux<ChatResponse>`：
