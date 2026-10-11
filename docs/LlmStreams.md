@@ -1,5 +1,91 @@
 # LlmStreams
 
+```java
+package com.flowagent.common.llm;
+
+import com.flowagent.common.exception.FlowAgentException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.metadata.EmptyUsage;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class LlmStreams {
+    //空闲超时的错误码
+    public static final String TIMEOUT_ERROR_CODE = "LLM_STREAM_TIMEOUT";
+    //一帧正文都没有的错误码
+    public static final String EMPTY_STREAM_ERROR_CODE = "LLM_STREAM_EMPTY";
+    //上游限流（429）重试到耗尽仍然失败的错误码
+    public static final String RETRY_EXHAUSTED_ERROR_CODE = "LLM_UPSTREAM_RETRY_EXHAUSTED";
+
+    //账号/额度问题--重试不会有帮助，直接失败
+    public static final String UPSTREAM_PERMANENT_ERROR_CODE = "LLM_UPSTREAM_PERMANENT";
+    //等发起配额时线程被打断
+    public static final String RATE_GATE_INTERRUPTED_ERROR_CODE = "LLM_RATE_GATE_INTERRUPTED";
+
+    //进程级的发起速率闸门
+    private static volatile LlmRateGate rateGate;
+
+    private static final Logger log=LoggerFactory.getLogger(LlmStreams.class);
+
+    //429 正文里出现这些词就意味着不是限流，而是账号本身的问题，重试是纯浪费。
+    private static final List<String> PERMANENT_MARKERS = List.of(
+            "insufficient balance",
+            "arrears",
+            "suspended",
+            "not activated");
+
+    private static final List<String> THROTTLE_WINDOW_MARKERS = List.of(
+            "allocated quota exceeded",
+            "exceeded your current quota",
+            "insufficient quota");
+
+    private static final List<String> OBSERVED_RATE_MARKERS = List.of(
+            "we have to rate limit you");
+
+    private static final Pattern MESSAGE_IN_BODY =
+            Pattern.compile("\"message\"\\s*:\\s*\"([^\"]*)\"");
+
+    private static final int UPSTREAM_EXCERPT_LIMIT = 160;
+
+    private LlmStreams() {
+    }
+
+    static void installRateGate(LlmRateGate gate) {
+        rateGate = gate;
+    }
+
+    static void uninstallRateGate(LlmRateGate gate) {
+        if (rateGate == gate) {
+            rateGate = null;
+        }
+    }
+
+    public static ChatResponse await(Supplier<Flux<ChatResponse>> stream, LlmCallProperties calls, String callSite) {
+        Object.requireNonNull(calls,
+                )
+    }
+}
+```
+
 ## `Flux<ChatResponse>`：
 
 OpenAI 兼容的流式响应（SSE）-- 上游不等整段回答生成完，每吐几个 token 就发一个 HTTP chunk。
@@ -129,4 +215,190 @@ Spring AI 1.0 在顶层调用时 `previousChatResponse` 是 null，它的累积�
 
 ## 重试
 
+```java
+// 内层 429 重试。<T> 泛型因为这层逻辑跟元素类型无关
+private static <T> Mono<T> retrying(Mono<T> attempt, int maxRetries,
+                                    Duration backoff, String callSite) {
+    // 次数<=0 时整条不挂。传 Retry.backoff(0) 会在第一个错误就触发耗尽发生器，把 429 换成"重试已耗尽"
+    if (maxRetries <= 0) {
+        return attempt;
+    }
+    // 退避时间：null 或负值钳成 ZERO。Retry.backoff 不收负 Duration
+    Duration delay = backoff == null || backoff.isNegative() ? Duration.ZERO : backoff;
+    // 原子计数器，只用于日志显示第几次重试
+    AtomicInteger retriesSoFar = new AtomicInteger();
 
+    // 给 attempt 挂重试
+    return attempt.retryWhen(Retry.backoff(maxRetries, delay)
+            // 白名单：返回 true 才重试。只有 429 且非账号问题才进这层
+            // 中断/超时/5xx/连接异常都返回 false，原样往下抛
+            .filter(LlmStreams::retryable)
+            // 每次重试前打 WARN：状态码、第几次、退避多久、限流类别、上游正文
+            // 0.5 抖动是 Reactor 默认，向上取，delay 是下限不是均值
+            // 抖动是承重的——两拨调用方同时撞上来时，固定退避会让它们同一毫秒再撞
+            .doBeforeRetry(signal -> log.warn(
+                    "[llm-stream] 上游 {} 限流，退避后重试 | callSite={} | 第 {}/{} 次重试"
+                            + " | 基础退避={}ms（带 0.5 抖动，实际更长） | 限流类别={} | 上游正文={}",
+                    statusOf(signal.failure()), callSite, retriesSoFar.incrementAndGet(),
+                    maxRetries, delay.toMillis(), throttleKind(signal.failure()),
+                    upstreamMessageOrNone(signal.failure())))
+            // 次数用完后抛什么错由这个发生器决定。用自己的 exhausted 而不是 Reactor 默认，
+            // 是为了把上游 429 的状态码和正文留在错误里，方便排障
+            .onRetryExhaustedThrow((spec, signal) -> exhausted(signal.failure(), maxRetries, callSite)));
+}
+
+// 429 重试耗尽的错误构造
+private static Throwable exhausted(Throwable failure, int maxRetries, String callSite) {
+    // 取上游 HTTP 状态码，取不到给 -1
+    int upstreamStatus = statusOf(failure);
+    // 抛 RETRY_EXHAUSTED 错误码。成因链必须自己接——换成自定义发生器后这件事得自己做，
+    // 否则上游那句"rate limit you"就丢了
+    return new FlowAgentException(RETRY_EXHAUSTED_ERROR_CODE,
+            "LLM 上游持续限流：重试 " + maxRetries + " 次后仍失败 | callSite=" + callSite
+                    + " | 上游状态=" + upstreamStatus
+                    + " | 限流类别=" + throttleKind(failure)
+                    + " | 上游正文=" + upstreamMessageOrNone(failure),
+            // HTTP 状态码优先用上游的（429），取不到给 502
+            upstreamStatus > 0 ? upstreamStatus : 502, failure);
+}
+
+// 外层空正文重试。结构跟内层几乎一样，但谓词不同
+private static Mono<ChatResponse> retryingEmptyBody(Mono<ChatResponse> attempt, int maxRetries,
+                                                   Duration backoff, String callSite) {
+    if (maxRetries <= 0) {
+        return attempt;
+    }
+    Duration delay = backoff == null || backoff.isNegative() ? Duration.ZERO : backoff;
+    AtomicInteger retriesSoFar = new AtomicInteger();
+
+    return attempt.retryWhen(Retry.backoff(maxRetries, delay)
+            // 只认 LLM_STREAM_EMPTY 这一个错误码。按错误码判不按消息文本判——
+            // 消息会改，错误码是契约。429 的耗尽错误码到不了这里
+            .filter(LlmStreams::isEmptyBody)
+            .doBeforeRetry(signal -> log.warn(
+                    "[llm-stream] 上游一帧正文都没有，退避后重试 | callSite={} | 第 {}/{} 次重试"
+                            // 文案跟内层不同：这一档不是"被拒"，是"上游接受了请求、生成了一整轮，
+                            // 只是正文通道一个 token 都没剩"。读日志的人要靠这行区分"被拒"与"白花钱"
+                            + " | 基础退避={}ms（带 0.5 抖动，实际更长，但这一档里等待不承担恢复作用）"
+                            + " | 原文={}",
+                    callSite, retriesSoFar.incrementAndGet(), maxRetries, delay.toMillis(),
+                    signal.failure().getMessage()))
+            .onRetryExhaustedThrow((spec, signal) ->
+                    exhaustedEmpty(signal.failure(), maxRetries, callSite)));
+}
+
+// 空正文重试耗尽。错误码保持 LLM_STREAM_EMPTY（不换），因为调用方和测试都按这个码判类
+private static Throwable exhaustedEmpty(Throwable failure, int maxRetries, String callSite) {
+    // 跟内层不同：不换错误码，只在消息里加"重试过"这件事。
+    // 否则"重试开了没有"在终态里看不出来，排查方向不同（重试过还是空=不是偶发）
+    return new FlowAgentException(EMPTY_STREAM_ERROR_CODE,
+            "LLM 流式响应重试 " + maxRetries + " 次后仍然没有任何正文帧 | callSite=" + callSite
+                    + " | 最后一次的原文=" + failure.getMessage(),
+            502, failure);
+}
+
+// 429 但正文是账号问题（余额不足/欠费/被停），不重试直接抛
+private static Throwable permanent(Throwable failure, String callSite) {
+    String upstream = upstreamMessageOrNone(failure);
+    // 打 WARN：这一路不会走 doBeforeRetry（压根不重试），不打就无法从日志看出"为什么没重试"
+    log.warn("[llm-stream] 上游 {} 不是限流而是账号/额度问题，重试无用，直接失败"
+                    + " | callSite={} | 上游正文={}",
+            statusOf(failure), callSite, upstream);
+    // 抛 UPSTREAM_PERMANENT 错误码。HTTP 状态码优先用 429，取不到给 402（付款问题）
+    return new FlowAgentException(UPSTREAM_PERMANENT_ERROR_CODE,
+            "LLM 上游 429 且重试无用（账号/额度，不是限流）：" + upstream
+                    + " | callSite=" + callSite + " | 上游状态=" + statusOf(failure),
+            statusOf(failure) > 0 ? statusOf(failure) : 402, failure);
+}
+
+// 内层重试白名单：只有 429 且非账号问题才返回 true
+private static boolean retryable(Throwable failure) {
+    // 两个条件同时满足：①状态码 429 ②正文不是账号问题
+    // 中断/超时/5xx/连接异常都返回 false，不被重试
+    return statusOf(failure) == 429 && !permanentUpstream(failure);
+}
+
+// 外层重试白名单：只有空正文错误码才返回 true
+private static boolean isEmptyBody(Throwable failure) {
+    // 先判类型是 FlowAgentException，再比错误码。不能用消息文本比——消息会改
+    return failure instanceof FlowAgentException fae
+            && EMPTY_STREAM_ERROR_CODE.equals(fae.getErrorCode());
+}
+
+// 429 且正文命中账号词表 → true
+private static boolean permanentUpstream(Throwable failure) {
+    return statusOf(failure) == 429 && mentionsPermanentReason(upstreamBody(failure));
+}
+
+private static boolean mentionsPermanentReason(String body) {
+    // 委托给 mentions，统一走"下划线归一为空格"的匹配
+    return mentions(body, PERMANENT_MARKERS);
+}
+
+// 429 细分类，只进日志不参与判定。处置都一样（退避重试），但要等多久不同
+private static String throttleKind(Throwable failure) {
+    String body = upstreamBody(failure);
+    // TPM/RPM 按窗口计：等一个分钟窗口
+    if (mentions(body, THROTTLE_WINDOW_MARKERS)) {
+        return "按窗口计（TPM/RPM 类）";
+    }
+    // 实测"we have to rate limit you"：10 秒左右恢复
+    if (mentions(body, OBSERVED_RATE_MARKERS)) {
+        return "发起过密（实测约 10 秒恢复）";
+    }
+    // 文档里的"频率激增保护"：几秒就够
+    if (mentions(body, List.of("request rate increased too quickly",
+            "requests rate limit exceeded", "current requests list"))) {
+        return "请求频率激增保护";
+    }
+    // 没见过的正文：该做的是把正文抄进词表，不是调退避
+    return "未分类";
+}
+
+// 正文是否命中某份词表
+private static boolean mentions(String body, List<String> markers) {
+    if (body == null) {
+        return false;
+    }
+    // 小写 + 下划线归一成空格。同一件事上游两种写法：
+    // 给人读的 message 是 "not activated"（空格），给机器读的 code 是 "not_activated"（下划线）
+    String lowered = body.toLowerCase(Locale.ROOT).replace('_', ' ');
+    // 词表任一命中即 true
+    return markers.stream().anyMatch(lowered::contains);
+}
+
+// 从异常里取响应体原文
+private static String upstreamBody(Throwable failure) {
+    // 只有 WebClientResponseException 才有响应体。其他异常（超时/中断）没有，返回 null
+    return failure instanceof WebClientResponseException wcre
+            ? wcre.getResponseBodyAsString()
+            : null;
+}
+
+// 从响应体里抠出最像"原因"的那句（魔搭形状是 {"error":{"message":"…"}}）
+private static String upstreamMessage(Throwable failure) {
+    String body = upstreamBody(failure);
+    if (body == null || body.isBlank()) {
+        return null;
+    }
+    // 正则抠出 "message":"..." 里的内容
+    Matcher matcher = MESSAGE_IN_BODY.matcher(body);
+    // 抠不到就用整个 body strip
+    String message = matcher.find() ? matcher.group(1) : body.strip();
+    // 太长截断，免得一段 HTML 灌满日志
+    return message.length() <= UPSTREAM_EXCERPT_LIMIT
+            ? message
+            : message.substring(0, UPSTREAM_EXCERPT_LIMIT) + "…";
+}
+
+// 日志里用：没有正文时给一句明说，别让 null 混进排查线索
+private static String upstreamMessageOrNone(Throwable failure) {
+    String message = upstreamMessage(failure);
+    return message == null || message.isBlank() ? "（正文为空）" : message;
+}
+
+// 取 HTTP 状态码。不是 HTTP 响应异常时返回 -1，由调用方决定默认值
+private static int statusOf(Throwable failure) {
+    return failure instanceof WebClientResponseException wcre ? wcre.getStatusCode().value() : -1;
+}
+```
