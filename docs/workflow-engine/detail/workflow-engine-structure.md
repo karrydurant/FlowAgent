@@ -1,91 +1,138 @@
 ```mermaid
 graph TD
-    %% 样式定义
-    classDef core fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    classDef scheduler fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    classDef executor fill:#e8f5e9,stroke:#388e3c,stroke-width:1.5px
-    classDef support fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1.5px
-    classDef model fill:#fafafa,stroke:#616161,stroke-width:1px
-    classDef peripheral fill:#ffebee,stroke:#c62828,stroke-width:1.5px
+    %% ================= 入口 / REST =================
+    subgraph REST["server 模块（入口）"]
+        WC[WorkflowController]
+    end
 
-    %% 核心调度层
-    WE["WorkflowExecutor<br/>1209行 · 总控调度"]:::scheduler
+    %% ================= 编排核心 =================
+    subgraph ORCH["executor 包 — 状态机"]
+        WE["WorkflowExecutor<br/>1721 行 · DAG 分层并行"]
+        NEF["NodeExecutorFactory<br/>按 NodeType 路由"]
+        VAR["VariableResolver<br/>${node:x:output} 占位符 / 缺输入闸门"]
+        SWP["WorkflowRunSweeper<br/>30s 扫描：崩溃接管 + 审批唤醒"]
+        ASC["ApprovalStatusClient<br/>查审批三态"]
+        SUSP["WorkflowSuspendedException<br/>审批挂起信号"]
+        WII["WorkflowInflightIndex (接口)"]
+        RWII["RedisWorkflowInflightIndex"]
+    end
 
-    %% DAG 层
-    DV["DagValidator<br/>141行 · DAG校验"]:::support
-    TS["TopologicalSorter<br/>79行 · 拓扑分层"]:::support
+    %% ================= 节点执行器族 =================
+    subgraph EXEC["executor/impl — 9 种 NodeExecutor"]
+        NEX["&lt;&lt;interface&gt;&gt; NodeExecutor"]
+        TOOL["ToolNodeExecutor"]
+        AGENT["AgentNodeExecutor"]
+        COND["ConditionNodeExecutor"]
+        AGG["AggregateNodeExecutor"]
+        HUM["HumanApprovalNodeExecutor"]
+        JUDGE["JudgeNodeExecutor"]
+        RETR["RetrievalNodeExecutor"]
+        DELEG["A2aDelegateNodeExecutor"]
+        NEG["A2aNegotiateNodeExecutor"]
+    end
 
-    %% Checkpoint 层
-    CPM["CheckpointManager<br/>107行 · 断点快照"]:::support
+    %% ================= DAG =================
+    subgraph DAG["dag 包"]
+        VAL["DagValidator<br/>Kahn 环路/入口检测"]
+        SORT["TopologicalSorter<br/>分层拓扑排序"]
+    end
 
-    %% 租约层
-    LMM["WorkflowRunLeaseManager<br/>121行 · 分布式锁"]:::support
+    %% ================= 租约 =================
+    subgraph LEASE["lease 包"]
+        LM["WorkflowRunLeaseManager<br/>看门狗续期"]
+        LEASEI["&lt;&lt;interface&gt;&gt; WorkflowRunLease"]
+        RL["RedissonWorkflowRunLease<br/>持 RLock"]
+    end
 
-    %% 节点工厂
-    NEF["NodeExecutorFactory<br/>39行 · 策略路由"]:::support
+    %% ================= 检查点 =================
+    subgraph CP["checkpoint 包"]
+        CPM["CheckpointManager<br/>快照到 Redis"]
+    end
 
-    %% 模型层
-    WD["WorkflowDefinition<br/>129行"]:::model
-    WR["WorkflowRun<br/>268行"]:::model
-    WN["WorkflowNode<br/>291行"]:::model
+    %% ================= ReAct 子系统 =================
+    subgraph REACT["agent 包 — ReAct 循环"]
+        RA["ReActAgent<br/>Thought/Action/Observation"]
+        CAT["AgentCatalog / AgentDefinition"]
+        CLOSE["CompositeToolBridge"]
+        HTTPB["HttpToolBridge<br/>调 MCP 工具"]
+        PEER["PeerAgentToolBridge<br/>把 peer agent 渲染成工具"]
+        INBOX["A2aInboxClient"]
+    end
 
-    %% 节点执行器
-    NE["NodeExecutor 接口<br/>19行"]:::executor
-    ANE["AgentNodeExecutor<br/>414行"]:::executor
-    TNE["ToolNodeExecutor<br/>97行"]:::executor
-    CNE["ConditionNodeExecutor<br/>118行"]:::executor
-    HANE["HumanApprovalNodeExecutor<br/>122行"]:::executor
-    JNE["JudgeNodeExecutor<br/>181行"]:::executor
-    ADNE["A2aDelegateNodeExecutor<br/>140行"]:::executor
-    ANNE["A2aNegotiateNodeExecutor<br/>125行"]:::executor
-    AGNE["AggregateNodeExecutor<br/>93行"]:::executor
-    RNE["RetrievalNodeExecutor<br/>70行"]:::executor
+    subgraph MEM["memory 包"]
+        MEMI["&lt;&lt;interface&gt;&gt; AgentMemoryStore"]
+        RMEM["RedisAgentMemoryStore<br/>(sessionId,agentId) 隔离"]
+    end
 
-    %% Agent 核心
-    RAA["ReActAgent<br/>925行 · 推理循环"]:::core
-    AC["AgentCatalog<br/>157行"]:::support
-    HB["HttpToolBridge<br/>162行 · MCP工具桥"]:::support
-    PAB["PeerAgentToolBridge<br/>456行 · A2A同伴桥"]:::support
-    CTB["CompositeToolBridge<br/>105行 · 组合桥"]:::support
-    AMS["RedisAgentMemoryStore<br/>278行 · 会话记忆"]:::support
+    %% ================= 模型 =================
+    subgraph MODEL["model 包"]
+        DEF["WorkflowDefinition / WorkflowNode<br/>WorkflowEdge / WorkflowRun"]
+    end
 
-    %% 崩溃接管
-    WRS["WorkflowRunSweeper<br/>338行 · 崩溃接管"]:::peripheral
+    %% ================= 外部边界 =================
+    REDIS[("Redis / RedissonClient")]
+    OBS["observability 模块<br/>AgentTracer / CostTracker / CostBudgetManager"]
+    GW_MCP["HTTP → mcp-gateway"]
+    GW_HUMAN["HTTP → human-gateway"]
+    GW_EVAL["HTTP → evaluation"]
+    GW_GRAG["HTTP → graphrag"]
+    GW_A2A["HTTP → a2a-gateway"]
+    LLMMODEL["Spring AI ChatClient<br/>(OpenAI 兼容 / GLM-5.2)"]
 
-    %% 依赖关系
-    WE --> DV
-    WE --> TS
-    WE --> CPM
-    WE --> LMM
+    %% ================= 依赖边 =================
+    WC -->|execute / resume / status| WE
+
     WE --> NEF
-    WE --> WD
-    WE --> WR
-    WE --> WN
+    WE --> VAR
+    WE --> VAL
+    WE --> SORT
+    WE --> CPM
+    WE --> LM
+    WE --> WII
+    WE -.timeline.-> OBS
+    WE --> DEF
 
-    NEF --> NE
-    NEF --> ANE
-    NEF --> TNE
-    NEF --> CNE
-    NEF --> HANE
-    NEF --> JNE
-    NEF --> ADNE
-    NEF --> ANNE
-    NEF --> AGNE
-    NEF --> RNE
+    NEF --> NEX
+    NEX -.->|9 个实现| TOOL & AGENT & COND & AGG & HUM & JUDGE & RETR & DELEG & NEG
 
-    ANE --> RAA
-    ANE --> AC
-    ANE --> AMS
+    %% Sweeper 与 Executor 互指（真实循环依赖）
+    SWP --> LM
+    SWP --> CPM
+    SWP --> WII
+    SWP --> ASC
+    SWP -->|resume 接管| WE
 
-    RAA --> CTB
-    CTB --> HB
-    CTB --> PAB
+    %% 执行器各自的下游
+    AGENT --> RA
+    AGENT --> CAT
+    AGENT --> MEMI
+    AGENT -.-> OBS
+    COND --> LLMMODEL
+    TOOL -.HTTP.-> GW_MCP
+    HUM -->|挂起抛 SUSP| SUSP
+    HUM -.HTTP.-> GW_HUMAN
+    JUDGE -.HTTP.-> GW_EVAL
+    RETR -.HTTP.-> GW_GRAG
+    DELEG -.HTTP.-> GW_A2A
+    NEG -.HTTP.-> GW_A2A
+    ASC -.HTTP.-> GW_HUMAN
 
-    WRS --> CPM
-    WRS --> LMM
-    WRS --> WE
+    %% ReAct 内部
+    RA --> CLOSE
+    RA --> LLMMODEL
+    RA --> INBOX
+    CLOSE --> HTTPB
+    CLOSE --> PEER
 
-    %% 布局调整
-    style WE fill:#fff3e0,stroke:#e65100,stroke-width:3px
-    style RAA fill:#e3f2fd,stroke:#0d47a1,stroke-width:3px
+    %% 实现关系
+    RWII -.->|implements| WII
+    RL -.->|implements| LEASEI
+    LM --> RL
+    RMEM -.->|implements| MEMI
+
+    %% Redis 落地
+    CPM -.-> REDIS
+    LM -.-> REDIS
+    RWII -.-> REDIS
+    RMEM -.-> REDIS
 ```
